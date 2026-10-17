@@ -314,3 +314,33 @@ Still not verifiable from a sandbox: the actual WebSocket handshake through a re
 - `node --check` on every module (module-syntax aware), esbuild bundle resolves the whole import graph, `git diff --check` clean, HTML parses with 193 unique ids and every JS-referenced id present, emoji scan of HTML/CSS/non-vendor JS clean.
 
 Still not verified here: a real TomTom key with the Routing products enabled, a physical iPhone/Android, and the Google Maps handoff on a real device. No browser executable exists in this environment, so this is not a visual browser review.
+
+---
+
+## Part 10 — v11.3.1: the route card that never loses its Start, exact overlay alignment, and traffic done in-app
+
+Field report on v11.3.0: after picking a destination from the suggestions, the Directions card felt missing behind the map chrome, and there was no visible way to Start — plus the new "Google traffic" pill handed the rider off to the Google Maps app, which is not what ApexMile is for.
+
+### 1. The route sheet is now the Google-Maps-style Directions card — with its own Start
+
+- **Root cause of the missing Start.** The v11.3.0 fold-to-one-bar design hid the search panel's Start button with it (`display:none` in the collapsed state), and the route sheet had no Start of its own. Once the plan appeared, the only CTA in the app had vanished.
+- **Fix.** The route sheet carries the primary **Start** action itself: destination name, big ETA / distance / arrival, mode chips, a full-width green **Start** button, then the cost, alternatives and the honest ETA note in a scrollable body. The panel's small "Start ride" is still there when the search bar is expanded for editing. `Start` is disabled while planning and while starting (no double taps), and ending guidance returns to this same card.
+- The sheet is capped at `min(54vh, 430px)` with internal scrolling, so on a small phone it can never swallow the map or the search bar — the Directions card and the map are on screen together, like Google Maps.
+
+### 2. Elements aligned instead of guessed
+
+- The sheet's margins are now symmetric with the safe-area insets on both sides (the right side ignored `safe-r` before), and its landscape dock sets its own right inset instead of reusing the portrait margins.
+- The card publishes its measured height as `--sheet-h` (recomputed on every render and on resize); the FABs and the map attribution now sit exactly above the card instead of at a hard-coded offset that let them land on top of it.
+
+### 3. Live traffic lives in TomTom, not in a Google handoff
+
+- The "Google traffic" pill is removed. Traffic on this map is TomTom's flow overlay and TomTom's traffic-aware ETAs — the in-app story — and the setup sheet is the one place to make it work.
+- The overlay lifecycle is now proven end to end in the smoke suite: attaches from the rider's key with the TomTom flow-tile URL, survives a satellite basemap swap (re-attached under the route lines), a 401/403 tile refusal detaches it once with a plain explanation (key and toggle preserved), and the Live Traffic pill re-enables it. The directions handoff to Google Maps stays on the route card as a secondary icon.
+
+### Verification
+
+- jsdom smoke suite extended to 39 checks: the folded one-bar search, sheet destination name, **Start present, enabled and starting guidance**, standard vs traffic-aware labels, 403 no-retry across re-plans, the full TomTom overlay lifecycle above, the Google traffic pill gone, the directions handoff intact, zero emoji — **all pass**.
+- Mocked TomTom routing suite (36 checks) still passes unchanged; `node --check` on every module; esbuild bundle resolves; `git diff --check` clean; HTML parses with unique ids; emoji scan clean.
+- SW bumped to `apexmile-v11.3.1`.
+
+Still not verified here: a real TomTom key on a real phone, and the Google-Maps feel of the card in a real browser — no browser executable exists in this environment.

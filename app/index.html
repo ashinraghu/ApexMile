@@ -377,14 +377,6 @@
               </svg>
               Satellite
             </button>
-            <button class="pill" type="button" id="gmapsPill" aria-label="Open the Google Maps traffic map">
-              <svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-                <path d="M14 4h6v6"></path>
-                <path d="m20 4-9 9"></path>
-                <path d="M18 13.5V19a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5.5"></path>
-              </svg>
-              Google traffic
-            </button>
           </div>
         </div>
 
@@ -438,20 +430,27 @@
         <!-- Route preview sheet -->
         <div class="route-sheet" id="routeSheet" hidden>
           <div class="rs-head">
-            <div>
+            <div class="rs-title">
+              <div class="rs-dest" id="rsDest">Destination</div>
               <div class="rs-eta"><b id="rsEta">-- min</b><span id="rsDist">-- km</span></div>
               <div class="rs-sub" id="rsSub">Fastest route</div>
-              <div class="rs-note" id="rsNote">Estimates use your own mileage where available.</div>
             </div>
             <div class="rs-actions">
-              <button class="btn ghost icon" id="rsGmapsBtn" aria-label="Open in Google Maps"><svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M14 4h6v6"/><path d="m20 4-9 9"/><path d="M18 13.5V19a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5.5"/></svg></button>
               <button class="btn ghost icon" id="rsStepsBtn" aria-label="Turn-by-turn list">≡</button>
+              <button class="btn ghost icon" id="rsGmapsBtn" aria-label="Open in Google Maps"><svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M14 4h6v6"/><path d="m20 4-9 9"/><path d="M18 13.5V19a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5.5"/></svg></button>
               <button class="btn ghost icon" id="rsClearBtn" aria-label="Close directions">✕</button>
             </div>
           </div>
           <div class="mode-etas" id="modeEtas" hidden></div>
-          <div class="rs-cost" id="rsCost" hidden></div>
-          <div class="alts" id="alts" hidden></div>
+          <button class="btn primary rs-start" id="rsStartBtn" type="button" disabled>
+            <svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3 5 21l7-4 7 4Z"/></svg>
+            <span>Start</span>
+          </button>
+          <div class="rs-body">
+            <div class="rs-cost" id="rsCost" hidden></div>
+            <div class="alts" id="alts" hidden></div>
+            <div class="rs-note" id="rsNote">Estimates use your own mileage where available.</div>
+          </div>
         </div>
 
         <!-- Group sheet -->
