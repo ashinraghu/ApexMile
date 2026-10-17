@@ -13,7 +13,7 @@ import * as mapCtl from './map.js';
 import {
   journey, plan, setDestination, setOrigin, setMode, clear as clearJourney,
   refresh as refreshJourney,
-  currentRoute, estimates, hasRoute, MODES, MODE_META,
+  currentRoute, estimates, hasRoute, MODES, MODE_META, modeRoute,
 } from './journey.js';
 import {
   localSuggest, remoteSuggest, geocode, reverseDistrict, reversePlace, formatDistance,
@@ -57,6 +57,11 @@ let offlineCycles = 0;
 let offlineGuided = false;
 let geoFixStamp = 0;
 let suggestionsToken = 0;
+// Google-Maps flow: picking a place opens its card with a Bike/Car/Walk
+// comparison, but Start stays hidden until the rider explicitly taps a mode
+// for THIS destination. Reset whenever the destination changes.
+let modeChosen = false;
+let chosenDestKey = null;
 
 /* ================================================================== boot */
 
@@ -641,17 +646,6 @@ function initRadarUi() {
   $('#micBtn')?.addEventListener('click', startVoiceSearch);
   $('#rsStepsBtn')?.addEventListener('click', openStepsSheet);
   $('#rsClearBtn')?.addEventListener('click', () => { clearJourney(); hideSuggestions(); $('#destInput').value = ''; });
-  $('#directionsBtn')?.addEventListener('click', onDirectionsPressed);
-  $$('.mode-btn').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const mode = btn.dataset.mode;
-      setMode(mode);
-      refreshModeUi();
-      if (ride.active && ride.isCaptain) setRideMode(mode);
-      haptic(6);
-    });
-  });
-
   $('#navExitBtn')?.addEventListener('click', confirmEndNavigation);
   $('#navEtaBtn')?.addEventListener('click', openStepsSheet);
   $('#navGroupBtn')?.addEventListener('click', () => {
@@ -892,9 +886,22 @@ function startVoiceSearch() {
 
 /* ------------------------------------------------------------------ journey events */
 
+function fmtEta(durationSec) {
+  const mins = Math.max(1, Math.round(durationSec / 60));
+  return mins < 60 ? `${mins} min` : `${Math.floor(mins / 60)} hr ${mins % 60} min`;
+}
+
 function onJourneyUpdate({ cleared } = {}) {
   const sheet = $('#routeSheet');
+  // A new destination restarts the Google-Maps flow: compare modes first,
+  // only then ETA + Start for the tapped mode.
+  if (journey.dest) {
+    const key = `${journey.dest.lat},${journey.dest.lng}`;
+    if (key !== chosenDestKey) { chosenDestKey = key; modeChosen = false; }
+  }
   if (cleared || !journey.dest) {
+    modeChosen = false;
+    chosenDestKey = null;
     sheet.hidden = true;
     document.body.classList.remove('has-sheet');
     if (!nav.active) {
@@ -919,11 +926,13 @@ function onJourneyUpdate({ cleared } = {}) {
     $('#rsDest').textContent = journey.dest.name;
     $('#rsEta').textContent = 'Planning…';
     $('#rsDist').textContent = '';
-    $('#rsSub').textContent = `Best ${MODE_META[journey.mode]?.label.toLowerCase() || ''} route`;
-    $('#rsNote').textContent = 'Checking roads, turns and traffic.';
+    $('#rsSub').textContent = 'Checking Bike, Car and Walk routes…';
+    $('#rsNote').textContent = 'Checking roads, turns and traffic for each mode.';
     const cost = $('#rsCost');
     if (cost) cost.hidden = true;
-    renderModeChips();
+    const altsEl = $('#alts');
+    if (altsEl) altsEl.hidden = true;
+    renderModeCompare();
     refreshModeUi();
     syncSheetHeight();
     return;
@@ -941,6 +950,7 @@ function onJourneyUpdate({ cleared } = {}) {
       $('#alts').hidden = true;
       const cost = $('#rsCost');
       if (cost) cost.hidden = true;
+      renderModeCompare();
       syncSheetHeight();
     }
     refreshModeUi();
@@ -952,8 +962,30 @@ function onJourneyUpdate({ cleared } = {}) {
   document.body.classList.add('has-sheet');
   $('#rsDest').textContent = journey.dest.name;
 
-  const mins = Math.max(1, Math.round(route.duration / 60));
-  $('#rsEta').textContent = mins < 60 ? `${mins} min` : `${Math.floor(mins / 60)} hr ${mins % 60} min`;
+  if (!modeChosen) {
+    // Place picked, routes compared — but the rider has not chosen how to
+    // travel yet. Show the comparison only: no headline ETA, no Start.
+    $('#rsEta').textContent = 'Choose a mode';
+    $('#rsDist').textContent = '';
+    $('#rsSub').textContent = 'Tap Bike, Car or Walk — its ETA and Start will appear here.';
+    $('#rsNote').textContent = 'Every ETA above is planned for that mode, not guessed from another mode\u2019s route.';
+    const cost = $('#rsCost');
+    if (cost) cost.hidden = true;
+    const altsEl = $('#alts');
+    if (altsEl) altsEl.hidden = true;
+    if (!nav.active) {
+      $('#destInput').value = journey.dest.name;
+      $('#destClear').hidden = false;
+      collapseSearch();
+    }
+    renderModeCompare();
+    refreshModeUi();
+    syncCaptainDestination();
+    syncSheetHeight();
+    return;
+  }
+
+  $('#rsEta').textContent = fmtEta(route.duration);
   $('#rsDist').textContent = `${est.km >= 10 ? est.km.toFixed(1) : est.km.toFixed(2)} km`;
   const basis = route.etaSource === 'tomtom' ? 'traffic-aware ETA' : 'standard estimate';
   $('#rsSub').textContent = `${MODE_META[journey.mode]?.label || 'Route'} · ${clockTime(est.arrival)} arrival · ${basis}`;
@@ -981,7 +1013,7 @@ function onJourneyUpdate({ cleared } = {}) {
     alts.hidden = true;
   }
 
-  renderModeChips();
+  renderModeCompare();
   renderRouteCost(route);
   refreshModeUi();
   syncCaptainDestination();
@@ -990,71 +1022,66 @@ function onJourneyUpdate({ cleared } = {}) {
   if (est.mode === 'car') ensureTolls(route);
 }
 
-/** The single primary button: Directions first, then Start once a route exists. */
+/**
+ * No Directions button any more (Google-Maps flow): picking a suggestion
+ * opens the place card directly. Start is revealed only after the rider
+ * taps a mode in the comparison for this destination, and its ETA is that
+ * mode's real routed ETA.
+ */
 function refreshModeUi() {
-  $$('.mode-btn').forEach((b) => {
-    const on = b.dataset.mode === journey.mode;
-    b.classList.toggle('active', on);
-    b.setAttribute('aria-pressed', on ? 'true' : 'false');
-  });
-  const go = $('#directionsBtn');
-  const typed = ($('#destInput')?.value || '').trim();
-  const pending = Boolean(typed) && (
-    !journey.dest || typed.toLowerCase() !== String(journey.dest.name).toLowerCase()
-  );
-  const ready = Boolean(journey.dest && currentRoute()) && !pending && !journey.loading;
-  if (go) {
-    go.textContent = ready ? 'Start ride' : 'Directions';
-    go.classList.toggle('ready', ready);
-    go.setAttribute('aria-label', ready ? 'Start navigation' : 'Show directions');
-    go.disabled = Boolean(journey.loading);
-  }
-  // The route sheet's Start is the primary CTA once a plan exists — it must
-  // never leave the screen just because the search panel folded to one bar.
+  const ready = Boolean(journey.dest && currentRoute()) && modeChosen && !journey.loading;
   const start = $('#rsStartBtn');
   if (start) {
     start.disabled = !ready;
-    start.hidden = !journey.dest;
+    start.hidden = !ready;
   }
 }
 
-function onDirectionsPressed() {
-  if (journey.loading) return toast('Still planning…', { ms: 1200 });
-  const typed = ($('#destInput')?.value || '').trim();
-  const differs = typed && (!journey.dest || typed.toLowerCase() !== String(journey.dest.name).toLowerCase());
-  if (differs) {
-    // Typed but not yet picked from the list — geocode it and show the route.
-    submitDestination();
-    return;
-  }
-  if (!journey.dest) {
-    $('#destInput')?.focus();
-    toast('Where to?', { icon: 'pin', ms: 1800 });
-    return;
-  }
-  if (hasRoute()) {
-    startPlannedNavigation();
-    return;
-  }
-  plan();
-}
-
-function renderModeChips() {
+/**
+ * The switchable Bike / Car / Walk comparison. Each card shows that mode's
+ * real routed ETA + distance (planned in parallel by planComparison), the
+ * fastest mode is tagged, and tapping a card selects it — revealing the
+ * headline ETA + Start for exactly that mode.
+ */
+function renderModeCompare() {
   const host = $('#rsMode');
   if (!host) return;
   host.innerHTML = '';
+  const durations = MODES.map((m) => modeRoute(m)?.duration).filter((d) => Number.isFinite(d));
+  const fastest = durations.length ? Math.min(...durations) : null;
   for (const mode of MODES) {
+    const route = modeRoute(mode);
     const b = document.createElement('button');
     b.type = 'button';
-    b.className = `rs-mode-chip ${journey.mode === mode ? 'active' : ''}`;
-    b.setAttribute('aria-pressed', journey.mode === mode ? 'true' : 'false');
-    b.innerHTML = `${uiIcon(MODE_META[mode].icon)} ${MODE_META[mode].label}`;
+    const selected = modeChosen && journey.mode === mode;
+    b.className = `mode-card ${selected ? 'active' : ''}`;
+    b.setAttribute('aria-pressed', selected ? 'true' : 'false');
+    let eta;
+    let dist = '';
+    let tag = '';
+    if (route) {
+      eta = fmtEta(route.duration);
+      const km = route.distance / 1000;
+      dist = `${km >= 10 ? km.toFixed(1) : km.toFixed(2)} km`;
+      if (fastest != null && route.duration === fastest && durations.length > 1) tag = '<span class="mc-tag">Fastest</span>';
+    } else if (journey.loading || journey.comparing) {
+      eta = 'Checking…';
+      b.disabled = true;
+    } else {
+      eta = 'No route';
+      b.disabled = true;
+    }
+    b.innerHTML = `${uiIcon(MODE_META[mode].icon)}<span class="mc-label">${MODE_META[mode].label}</span><span class="mc-eta">${eta}</span><span class="mc-dist">${dist}</span>${tag}`;
     b.addEventListener('click', () => {
-      if (journey.mode === mode) return;
+      if (!modeRoute(mode)) return;
+      modeChosen = true;
       haptic(6);
-      setMode(mode);
+      setMode(mode); // instant: this mode was already planned for comparison
       refreshModeUi();
       if (ride.active && ride.isCaptain) setRideMode(mode);
+      // setMode emits journey:update when the mode actually switches; when
+      // re-tapping the current mode it may not, so re-render explicitly.
+      onJourneyUpdate();
     });
     host.append(b);
   }
@@ -1158,11 +1185,6 @@ async function startPlannedNavigation() {
   // while it is still tied to the gesture.
   enterImmersive();
 
-  const btn = $('#directionsBtn');
-  if (btn) {
-    btn.disabled = true;
-    btn.textContent = 'Starting…';
-  }
   const rsStart = $('#rsStartBtn');
   if (rsStart) rsStart.disabled = true;
 
@@ -1190,10 +1212,7 @@ async function startPlannedNavigation() {
     exitImmersive();
   } finally {
     if (!nav.active) exitImmersive();
-    if (btn) {
-      btn.disabled = false;
-      refreshModeUi();
-    }
+    refreshModeUi();
   }
 }
 

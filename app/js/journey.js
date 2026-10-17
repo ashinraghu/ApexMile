@@ -20,22 +20,38 @@ export const journey = {
   userMode: Boolean(state.tripModeSet), // true once the rider picks a mode explicitly
   loading: false,
   error: null,
+  // Real per-mode routes for the current destination, filled by
+  // planComparison(). This is what powers the Bike / Car / Walk comparison:
+  // every ETA in it comes from an actual routing-engine call for that mode —
+  // never from dividing another mode's distance by an assumed speed (the
+  // v11.3.1 bug that v11.3.2 removed rather than fixed).
+  modeRoutes: {}, // mode -> routes[] (same shape as journey.routes)
+  modeErrors: {}, // mode -> message, for modes with no route
+  comparing: false,
 };
 
 export const MODES = ['bike', 'car', 'walk'];
 export const MODE_META = {
-  bike: { label: 'Bike', icon: 'bike', kmh: 33 },
-  car: { label: 'Car', icon: 'car', kmh: 38 },
-  walk: { label: 'Walk', icon: 'walk', kmh: 4.8 },
+  bike: { label: 'Bike', icon: 'bike' },
+  car: { label: 'Car', icon: 'car' },
+  walk: { label: 'Walk', icon: 'walk' },
 };
 
-/** Minutes for any mode, using this route's own duration when it matches. */
+/** The best (first) real route we hold for a mode, or null. */
+export function modeRoute(mode) {
+  return journey.modeRoutes?.[mode]?.[0] || null;
+}
+
+/**
+ * Minutes for a mode — ONLY from a real route planned for that mode.
+ * Returns null when we have not planned that mode, so callers can show
+ * "checking…" / "no route" instead of a guessed number.
+ */
 export function modeMinutes(mode, route = currentRoute()) {
-  if (!route) return null;
-  if (route.mode === mode && route.duration) return Math.max(1, Math.round(route.duration / 60));
-  const km = route.distance / 1000;
-  const kmh = MODE_META[mode]?.kmh || 33;
-  return Math.max(1, Math.round((km / kmh) * 60));
+  const own = modeRoute(mode);
+  if (own?.duration) return Math.max(1, Math.round(own.duration / 60));
+  if (route && route.mode === mode && route.duration) return Math.max(1, Math.round(route.duration / 60));
+  return null;
 }
 
 export function startPoint() {
@@ -58,8 +74,19 @@ export function setMode(mode, { explicit = true } = {}) {
   }
   state.tripMode = mode;
   save();
-  if (journey.mode === mode) { emit(); return; }
+  if (journey.mode === mode && journey.routes.length) { emit(); return; }
   journey.mode = mode;
+  // Google-Maps behaviour: switching mode in the comparison is instant when
+  // we already planned that mode (we did, in parallel, on destination pick).
+  const cached = journey.modeRoutes?.[mode];
+  if (journey.dest && cached?.length) {
+    journey.routes = cached;
+    journey.selected = 0;
+    journey.error = null;
+    draw();
+    emit();
+    return;
+  }
   if (journey.dest) plan({ fit: false });
   else emit();
 }
@@ -77,46 +104,68 @@ export function select(index) {
   emit();
 }
 
-export async function plan({ fit = true, silent = false } = {}) {
-  if (!journey.dest) return null;
+let planSeq = 0;
 
+/**
+ * Plan every travel mode for the destination in parallel, so the place card
+ * can show a Bike / Car / Walk comparison with a real, differentiated ETA
+ * for each — like Google Maps. The currently chosen mode's routes become
+ * journey.routes; switching mode afterwards is a cache hit, not a re-plan.
+ */
+export async function planComparison({ fit = true, silent = false } = {}) {
+  if (!journey.dest) return null;
+  const seq = ++planSeq;
   const from = startPoint();
+  const to = journey.dest;
+  const via = journey.stops;
   journey.loading = true;
+  journey.comparing = true;
   journey.error = null;
+  journey.modeRoutes = {};
+  journey.modeErrors = {};
   emit();
 
-  try {
-    const { routes, mode } = await directions({
-      from,
-      to: journey.dest,
-      via: journey.stops,
-      mode: journey.mode,
-    });
-    journey.routes = routes.map((r) => {
-      const meta = buildRouteMeta(r);
-      return { ...r, meta };
-    });
-    journey.selected = 0;
-    journey.mode = mode;
-    draw();
-    if (fit) mapCtl.fitRoute(journey.routes[0].meta.coords, { paddingBottom: 250 });
-    journey.loading = false;
-    emit();
-    return journey.routes[0];
-  } catch (err) {
-    journey.loading = false;
-    journey.error = err?.message || 'Could not plan that route';
+  const settled = await Promise.allSettled(MODES.map(async (mode) => {
+    const { routes } = await directions({ from, to, via, mode });
+    return routes.map((r) => ({ ...r, meta: buildRouteMeta(r) }));
+  }));
+  if (seq !== planSeq) return null; // a newer plan superseded this one
+
+  settled.forEach((res, i) => {
+    const mode = MODES[i];
+    if (res.status === 'fulfilled' && res.value.length) journey.modeRoutes[mode] = res.value;
+    else journey.modeErrors[mode] = res.reason?.message || 'No route for this mode';
+  });
+
+  // Keep the chosen mode if it has a route; otherwise fall back to the
+  // first mode that does, so the map is never left routeless when at
+  // least one way of travelling works.
+  if (!journey.modeRoutes[journey.mode]?.length) {
+    const fallback = MODES.find((m) => journey.modeRoutes[m]?.length);
+    if (fallback) journey.mode = fallback;
+  }
+  journey.routes = journey.modeRoutes[journey.mode] || [];
+  journey.selected = 0;
+  journey.loading = false;
+  journey.comparing = false;
+
+  if (!journey.routes.length) {
+    journey.error = 'Could not plan that route';
     emit();
     if (!silent) {
-      toast(
-        /fetch|network|abort/i.test(String(err?.message))
-          ? 'Routing service did not answer. Check your connection.'
-          : 'No drivable route found between those points.',
-        { type: 'err' },
-      );
+      toast('No route found between those points for Bike, Car or Walk. Check your connection or the places.', { type: 'err' });
     }
     return null;
   }
+  draw();
+  if (fit) mapCtl.fitRoute(journey.routes[0].meta.coords, { paddingBottom: 250 });
+  emit();
+  return journey.routes[0];
+}
+
+/** Back-compat name: every re-plan is now a full mode comparison. */
+export async function plan(opts = {}) {
+  return planComparison(opts);
 }
 
 function draw() {
@@ -142,6 +191,11 @@ export function clear({ keepView = false } = {}) {
   journey.stops = [];
   journey.selected = 0;
   journey.error = null;
+  journey.modeRoutes = {};
+  journey.modeErrors = {};
+  journey.comparing = false;
+  journey.loading = false;
+  planSeq += 1; // ignore any comparison still in flight for the old place
   mapCtl.clearRoute();
   emit({ cleared: true });
   if (!keepView && geo.pos) mapCtl.recenter(geo.pos, { zoom: 15.6, duration: 500 });
