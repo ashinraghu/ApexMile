@@ -51,6 +51,8 @@ let mapInitialised = false;
 let lastPeerSig = null;
 let lastGeoErrAt = 0;
 let lastRideOfflineToast = 0;
+let offlineCycles = 0;
+let offlineGuided = false;
 let geoFixStamp = 0;
 let suggestionsToken = 0;
 
@@ -1426,9 +1428,18 @@ function wireBus() {
     renderSync();
     renderSyncTransport();
     updateChatBadge(ride._unread);
-    if (status === 'offline' && ride.active && Date.now() - lastRideOfflineToast > 20000) {
-      lastRideOfflineToast = Date.now();
-      toast('Ride sync is offline — position sharing will resume when the connection returns', { type: 'warn', icon: '📡', ms: 4500 });
+    if (status === 'live') offlineCycles = 0;
+    if (status === 'offline' && ride.active) {
+      offlineCycles += 1;
+      if (offlineCycles >= 3 && !offlineGuided) {
+        // Every broker in the list failed repeatedly: that's not congestion,
+        // it's a network that blocks public relays — say so and offer the out.
+        offlineGuided = true;
+        toast('No ride broker reachable on this network — some networks block them. Try mobile data, or set a custom broker in Ride settings', { type: 'err', icon: '📡', ms: 7000 });
+      } else if (!offlineGuided && Date.now() - lastRideOfflineToast > 20000) {
+        lastRideOfflineToast = Date.now();
+        toast('Ride sync is offline — position sharing will resume when the connection returns', { type: 'warn', icon: '📡', ms: 4500 });
+      }
     }
   });
 

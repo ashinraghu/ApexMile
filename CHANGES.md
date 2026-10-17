@@ -252,3 +252,31 @@ Three field reports from the first v11.2 rides, all reproduced from the code.
 - Node smoke run against the built modules: five ETA assertions + probe-URL assertions — **all pass**; `node --check` on every touched module (`routing`, `rooms`, `map`, `main`, `sw`) — clean.
 
 Still not verified here: real TomTom key with the products enabled, real multi-phone MQTT room across carriers, and physical iPhone/Android GPS — these need devices, not a sandbox.
+
+---
+
+## Part 8 — v11.2.2: a mode model built for real motorcycles, and the CSP that silenced Ride Sync
+
+Two follow-ups from the field after v11.2.1.
+
+### 1. Bike/car logic redefined around what a bike actually is
+
+- **The spec, now explicit in the code:** ApexMile "bike" is a large-capacity motorcycle (100–1000 cc class): it filters through city congestion (the reason bike commuting exists in Indian cities), and on the open road it sustains 120–165 km/h — at least the pace of any regular car. Therefore no band of the model may ever show a bike slower than the same trip by car.
+- **One shared baseline, two honest views.** Both modes are timed off the route's free-flow seconds: car ×(1.18 / 1.10 / 1.05 by band), bike ×(0.82 / 0.95 / 0.98). The bike factors sit strictly below the car factors in every band — filtering advantage in the city, open-road parity-plus beyond.
+- **Provable ordering.** `modeledBikeSeconds` ends with `Math.min(·, carFactor(km))`: at worst, on physically implausible inputs, the bike settles for a tie — it can never display worse. Verified exhaustively: 96 distance×speed combinations, zero display-level inversions. Showcases: city 10 km → 15 vs 18 min; highway 60 km → 44 vs 47 min; 130 km/h free-flow 80 km → 36 vs 39 min.
+- **Valhalla now knows the machine.** The motorcycle costing goes out with `costing_options.motorcycle.top_speed = 160` — the stock ~120 km/h scooter-class default undersold open-road legs. (Bicycle costing was already ejected in v11.2.1; this round redefines the whole comparison model, not just the engine.)
+- These remain modeled estimates, labelled as such — honest congestion modelling, not a fake "live traffic" claim.
+
+### 2. Ride Sync "continuously trying, never connecting even once" — the app's own CSP blocked every broker
+
+- **Root cause.** The content security policy listed broker hosts *without ports* (`wss://broker.emqx.io`). Per the CSP matching rules, a host-source with no port-part only matches the scheme's default port — **443** — so every broker WebSocket URL the app uses (`:8084`, `:8884`, `:8081`) was refused at the browser, before any network traffic. The MQTT client then failed over through all four brokers, every 15 s, forever. The only CSP-legal broker in earlier builds was Eclipse's `:443` — which no longer exists. This is why it never succeeded even once, on any network.
+- **Fix.** `connect-src` now names each broker with its exact port: `wss://broker.emqx.io:8084`, `wss://broker.hivemq.com:8884`, `wss://mqtt-dashboard.com:8884`, `wss://test.mosquitto.org:8081`.
+- **And when a network really does block relays** (some corporate/carrier networks block all public MQTT): after three full broker cycles the app says so plainly and points to the escape hatches (mobile data, or a custom broker in Ride settings) instead of looping silently.
+- v11.2.1's co-location, SUBACK-announce and background-heartbeat fixes all stand: once connected — which is now possible — the whole room meets on the same broker.
+- SW bumped to `apexmile-v11.2.2`.
+
+### Verification
+
+- Node smoke model suite: band showcases + 96-combination ordering sweep — **all pass**; `node --check` on every touched module — clean.
+
+Still not verifiable from a sandbox: the actual WebSocket handshake through a real browser on real networks (the CSP change is the kind you verify on a phone, so test it there first), multi-device rooms, and a real TomTom key.

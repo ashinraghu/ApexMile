@@ -228,36 +228,48 @@ export async function directions({ from, to, via = [], mode = 'bike' }) {
  * bike ETA should never read worse than the same trip in a car. On the open
  * highway both converge — nobody filters at 90 km/h.
  */
+/**
+ * The ApexMile mode model. One shared free-flow baseline per route, two honest
+ * views of it:
+ *
+ *   band            car (×free-flow)   bike (×free-flow)   why
+ *   city  < 12 km        1.18              0.82   a bike filters past queues a car waits in
+ *   intercity 12–45      1.10              0.95   signals/barriers bind cars harder
+ *   open road > 45       1.05              0.98   a big bike cruises at least at car pace
+ *
+ * The bike factors sit below the car factors in every band ON PURPOSE:
+ * ApexMile "bike" is a large-capacity motorcycle (100–1000 cc class) — through
+ * traffic it filters, on the open road it holds 120+ km/h like any car, so a
+ * bike ETA must never read worse than the same trip by car. Valhalla's
+ * motorcycle costing (with a 160 km/h top speed, not the scooter-class
+ * default) supplies bike-legal geometry and the baseline; the factors model
+ * congestion reality on top. These are modeled estimates, not live traffic.
+ */
+function carFactor(km) {
+  return km < 12 ? 1.18 : km < 60 ? 1.1 : 1.05;
+}
+
 export function adjustedDuration(route, mode) {
   const km = route.distance / 1000;
   if (mode === 'walk') return (km / 4.8) * 3600;
   if (mode === 'bike') {
     // OSRM's duration is a free-flow *car* estimate over this exact geometry:
-    // the honest baseline for a like-for-like bike-vs-car comparison.
+    // the honest shared baseline for a like-for-like bike-vs-car comparison.
     return modeledBikeSeconds(route.duration, km);
   }
-  const factor = km < 12 ? 1.18 : km < 60 ? 1.1 : 1.05;
-  return route.duration * factor;
+  return route.duration * carFactor(km);
 }
 
 /**
- * Router ETAs (Valhalla motorcycle costing, like OSRM's car costing) assume
- * free-flow. In the city a motorcycle keeps moving while cars queue, so trim
- * urban routes for that filtering advantage; leave open-road times alone.
- * A plausibility floor keeps the claim honest — never model the bike faster
- * than a sane moving average for the distance band. The trims deliberately
- * sit below the car congestion factors (1.18 / 1.10 / 1.05) over the same
- * free-flow baseline, so a bike ETA never reads worse than the same trip by
- * car — exactly what riders expect in Indian city traffic.
+ * Bike seconds from a free-flow baseline. `Math.max` with the plausibility
+ * floor stops the urban trim from claiming impossible moving averages —
+ * but `Math.min` with the band's own car model guarantees the ordering that
+ * matters: on the same baseline a bike never displays slower than a car.
  */
 export function modeledBikeSeconds(seconds, km) {
-  const trim = km < 12 ? 0.82 : km < 45 ? 0.95 : 1;
-  // The plausibility floor exists to rein in the filtering trim; with no trim
-  // (open road) the router's number is already fine and must pass untouched.
-  if (trim === 1) return Math.round(seconds);
-  const capKmh = km < 12 ? 40 : 55;
-  const floorSeconds = (km / capKmh) * 3600;
-  return Math.max(Math.round(seconds * trim), Math.round(floorSeconds));
+  const trim = km < 12 ? 0.82 : km < 45 ? 0.95 : 0.98;
+  const floor = km < 12 ? (km / 40) * 3600 : km < 45 ? (km / 55) * 3600 : 0;
+  return Math.min(Math.max(Math.round(seconds * trim), Math.round(floor)), seconds * carFactor(km));
 }
 
 /* ------------------------------------------------------------------ Valhalla */
@@ -321,6 +333,9 @@ async function valhallaRoute(points, mode) {
       body: JSON.stringify({
         locations: points.map((p) => ({ lat: Number(p.lat), lon: Number(p.lng), type: 'break' })),
         costing: VALHALLA_COSTING[mode],
+        // A large-capacity motorcycle, not Valhalla's scooter-class default:
+        // its stock ~120 km/h top speed would undersell open-road legs.
+        ...(mode === 'bike' ? { costing_options: { motorcycle: { top_speed: 160 } } } : {}),
         units: 'kilometers',
         language: 'en-IN',
         shape_format: 'geojson',
