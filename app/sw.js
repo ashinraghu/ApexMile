@@ -2,7 +2,7 @@
  * Shell-first cache so the app opens instantly and works offline; map tiles get
  * their own bounded cache; routing and search stay network-only by design.
  */
-const VERSION = 'apexmile-v11.2.1';
+const VERSION = 'apexmile-v11.2.2';
 const SHELL = `${VERSION}-shell`;
 const TILES = `${VERSION}-tiles`;
 
