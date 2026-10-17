@@ -1,0 +1,9 @@
+{
+  // ApexMile is a static, assets-only Worker: no server script, no build step.
+  // Cloudflare serves everything in app/ directly, including _headers and sw.js.
+  "name": "apexmile",
+  "compatibility_date": "2026-10-17",
+  "assets": {
+    "directory": "./app"
+  }
+}

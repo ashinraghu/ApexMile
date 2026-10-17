@@ -1,0 +1,695 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>ApexMile — Ride Radar & Mileage</title>
+
+<!-- ── Viewport: allow pinch zoom (a11y). dvh + safe areas handle iPhone notch in standalone. ── -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="color-scheme" content="light dark" />
+<meta name="theme-color" content="#FFFFFF" media="(prefers-color-scheme: light)" />
+<meta name="theme-color" content="#0B1220" media="(prefers-color-scheme: dark)" />
+
+<!-- ── iOS home screen ── -->
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+<meta name="apple-mobile-web-app-title" content="ApexMile" />
+<link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png" />
+
+<!-- ── Android / PWA ── -->
+<link rel="manifest" href="manifest.webmanifest" />
+<link rel="icon" href="assets/icons/favicon-32.png" sizes="32x32" />
+<link rel="icon" href="assets/icons/icon-192.png" sizes="192x192" />
+
+<meta name="description" content="ApexMile — fuel mileage tracker and live group-ride radar for bikers. See your pack on an offline-ready map, get automatic pack-gap alerts, and never lose a rider." />
+
+<!-- ── Content Security Policy: everything is same-origin except map tiles / routing / broker ── -->
+<meta http-equiv="Content-Security-Policy" content="
+  default-src 'self';
+  script-src 'self';
+  style-src 'self' 'unsafe-inline';
+  img-src 'self' data: blob: https://tiles.openfreemap.org https://*.basemaps.cartocdn.com https://*.tile.openstreetmap.org https://server.arcgisonline.com https://*.arcgisonline.com;
+  font-src 'self';
+  connect-src 'self' https://tiles.openfreemap.org https://*.basemaps.cartocdn.com https://server.arcgisonline.com https://*.arcgisonline.com https://router.project-osrm.org https://nominatim.openstreetmap.org https://overpass-api.de wss://broker.emqx.io https://broker.emqx.io;
+  worker-src 'self' blob:;
+  child-src 'self' blob:;
+  manifest-src 'self';
+  base-uri 'self';
+  form-action 'self';
+  frame-ancestors 'self';
+" />
+
+<link rel="stylesheet" href="assets/vendor/maplibre-gl.css" />
+<link rel="stylesheet" href="css/app.css" />
+</head>
+<body>
+
+<noscript>
+  <div style="position:fixed;inset:0;display:grid;place-items:center;padding:24px;background:#0B1220;color:#fff;font-family:system-ui,sans-serif;text-align:center;z-index:9999">
+    <div><b style="font-size:20px">ApexMile needs JavaScript</b><p style="opacity:.75;font-size:14px">Enable JavaScript in your browser, then reload this page.</p></div>
+  </div>
+</noscript>
+
+<!-- ═══════════════ Boot splash ═══════════════ -->
+<div id="boot" class="boot">
+  <div class="boot-logo" aria-hidden="true">
+    <svg viewBox="0 0 64 64"><path d="M12 52 L32 14 L52 52" fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/><path d="M21 40 H43" stroke="currentColor" stroke-width="6" stroke-linecap="round"/></svg>
+  </div>
+  <div class="boot-name">ApexMile</div>
+  <div class="boot-bar"><i></i></div>
+</div>
+
+<!-- ═══════════════ Onboarding / sign-in ═══════════════ -->
+<div id="authScreen" class="auth-screen" hidden>
+  <div class="auth-scroll">
+    <div class="auth-card">
+      <div class="auth-logo" aria-hidden="true">
+        <svg viewBox="0 0 64 64"><path d="M12 52 L32 14 L52 52" fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/><path d="M21 40 H43" stroke="currentColor" stroke-width="6" stroke-linecap="round"/></svg>
+      </div>
+      <h1 class="auth-title">ApexMile</h1>
+      <p class="auth-sub">Mileage that adds up. A pack radar that keeps everyone together.</p>
+
+      <div class="field">
+        <label for="authName">Your name</label>
+        <input id="authName" type="text" autocomplete="name" enterkeyhint="next" placeholder="e.g. Arjun" />
+      </div>
+      <div class="field">
+        <label for="authContact">Phone <span class="opt">(optional — only shared if you invite)</span></label>
+        <input id="authContact" type="tel" autocomplete="tel" enterkeyhint="go" placeholder="+91 98450 00000" />
+      </div>
+
+      <button id="authStartBtn" class="btn primary lg" type="button">Start riding</button>
+
+      <p class="auth-legal">
+        Location is used on-device for mileage, routing and the group radar. It leaves your phone
+        <b>only while you are in a live ride room</b>, and only to riders in that room.
+        <a href="#/privacy">Privacy</a>
+      </p>
+    </div>
+
+    <div class="install-hint" id="installHint" hidden>
+      <div class="install-hint-ico" aria-hidden="true">⇧</div>
+      <div>
+        <b>Add ApexMile to your Home Screen</b>
+        <span id="installHintText">Tap Share, then “Add to Home Screen” for the full-screen app experience.</span>
+      </div>
+      <button class="icon-btn" type="button" id="installHintClose" aria-label="Dismiss">✕</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ Join an invite ═══════════════ -->
+<div id="joinScreen" class="auth-screen join-screen" hidden>
+  <div class="auth-scroll">
+    <div class="auth-card">
+      <div class="join-badge">You’re invited</div>
+      <h1 class="auth-title" id="joinTitle">Join the ride</h1>
+      <p class="auth-sub" id="joinSub">Live location is shared with the riders in this room until you leave.</p>
+
+      <div class="room-code-box">
+        <span class="room-code-label">Room code</span>
+        <span class="room-code" id="joinRoomCode">RIDE---</span>
+      </div>
+
+      <div class="field">
+        <label for="joinName">Your name</label>
+        <input id="joinName" type="text" autocomplete="given-name" enterkeyhint="go" placeholder="Riders will see this" />
+      </div>
+
+      <button id="joinBtn" class="btn primary lg" type="button">Join ride & share location</button>
+      <button id="joinCancelBtn" class="btn ghost" type="button">Not now</button>
+
+      <p class="auth-legal">
+        While in this room your name, status and live position are broadcast to the other riders
+        (over a public demo broker). Leave the ride to stop sharing.
+      </p>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ App shell ═══════════════ -->
+<div id="app" class="app" hidden>
+
+  <header class="topbar" id="topbar">
+    <button class="icon-btn" id="backBtn" aria-label="Back" hidden>←</button>
+    <button class="avatar" id="avatarBtn" aria-label="Profile">
+      <span id="avatarInitial">A</span>
+    </button>
+    <div class="topbar-mid">
+      <div class="topbar-title" id="topTitle">ApexMile</div>
+      <div class="topbar-sub" id="topSub">Bengaluru</div>
+    </div>
+    <div class="topbar-actions">
+      <button class="icon-btn" id="themeBtn" aria-label="Theme">
+        <svg viewBox="0 0 24 24"><path d="M12 3v2M12 19v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M3 12h2M19 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"/><circle cx="12" cy="12" r="4"/></svg>
+      </button>
+      <button class="icon-btn" id="syncBadge" aria-label="Connection status" title="Connection">
+        <span class="dot" id="syncDot"></span>
+        <span class="sync-label" id="syncLabel">Offline</span>
+      </button>
+    </div>
+  </header>
+
+  <main class="stage" id="stage">
+
+    <!-- ═════════ HOME ═════════ -->
+    <section class="tab" id="tab-home" data-tab="home">
+      <div class="veh-strip" id="vehStrip"></div>
+
+      <div class="hero card">
+        <div class="hero-top">
+          <button class="veh-pill" id="heroVehBtn">
+            <span class="veh-thumb" id="heroThumb">🏍️</span>
+            <span id="heroName">Add a vehicle</span>
+            <span class="pencil">Edit</span>
+          </button>
+          <button class="odo-badge" id="heroOdoBtn">
+            ODO <b id="heroOdo">0 km</b>
+          </button>
+        </div>
+
+        <div class="hero-mid">
+          <div>
+            <div class="caps">Real mileage <span class="src-chip" id="heroKmplSource">estimate</span></div>
+            <div class="hero-kmpl"><b id="heroKmpl">--</b><span>km/L</span></div>
+          </div>
+          <div class="hero-range">
+            <div class="caps">Safe range</div>
+            <div class="hero-range-val" id="heroRange">-- km</div>
+          </div>
+        </div>
+
+        <div class="hero-grid">
+          <div><div class="caps">Cost / km</div><b id="heroCost">--</b></div>
+          <div><div class="caps">Fuel grade</div><b id="heroOctane" class="accent">95</b></div>
+          <div><div class="caps">Altitude</div><b id="heroAlt">-- m</b></div>
+        </div>
+
+        <div class="hero-stats">
+          <div><div class="caps">Logged</div><b id="heroLogged" class="blue">0 km</b></div>
+          <div><div class="caps">Spent</div><b id="heroSpent" class="accent">₹0</b></div>
+          <div><div class="caps">Fill-ups</div><b id="heroFills" class="green">0</b></div>
+        </div>
+      </div>
+
+      <div class="tiles">
+        <button class="tile t1" data-go="refuel">
+          <span class="tile-ico">⛽</span><span class="tile-t">Log fuel</span><span class="tile-s" id="tileFuelSub">₹600</span>
+        </button>
+        <button class="tile t2" data-go="radar">
+          <span class="tile-ico">📡</span><span class="tile-t">Ride radar</span><span class="tile-s" id="tileRadarSub">Live</span>
+        </button>
+        <button class="tile t3" id="tileChain">
+          <span class="tile-ico">⛓️</span><span class="tile-t">Chain</span><span class="tile-s" id="tileChainSub">-- km</span>
+        </button>
+        <button class="tile t4" id="tileAddVeh">
+          <span class="tile-ico">＋</span><span class="tile-t">Add vehicle</span><span class="tile-s">Garage</span>
+        </button>
+      </div>
+
+      <div class="card">
+        <div class="row between">
+          <div>
+            <div class="card-title">Fuel prices</div>
+            <div class="card-sub" id="priceRegion">Bengaluru, Karnataka</div>
+          </div>
+          <div class="row gap6">
+            <button class="chip" id="priceAutoBtn">Use my district</button>
+          </div>
+        </div>
+        <div class="oct-grid" id="octGrid"></div>
+        <div class="price-foot" id="priceFoot"></div>
+      </div>
+    </section>
+
+    <!-- ═════════ REFUEL ═════════ -->
+    <section class="tab" id="tab-refuel" data-tab="refuel" hidden>
+      <div class="card">
+        <div class="row between">
+          <span class="caps">Logging for</span>
+          <select id="refuelVehSelect" class="select slim"></select>
+        </div>
+
+        <div class="odo-row">
+          <div>
+            <div class="caps">Last ODO</div>
+            <div class="odo-val" id="refuelLastOdo">0 km</div>
+          </div>
+          <div class="right">
+            <div class="caps">Mileage</div>
+            <div class="odo-mil" id="refuelKmpl">-- km/L</div>
+          </div>
+        </div>
+
+        <label class="field">
+          <span>New odometer reading (km)</span>
+          <input id="refuelOdo" type="number" inputmode="numeric" enterkeyhint="next" placeholder="e.g. 12840" />
+          <small id="refuelDelta">Last ODO 0 km</small>
+        </label>
+
+        <div class="field">
+          <span>Amount paid (₹)</span>
+          <div class="preset-row">
+            <button class="preset" data-amt="600">₹600</button>
+            <button class="preset" data-amt="1100">₹1100</button>
+            <button class="preset" data-amt="custom">Custom</button>
+          </div>
+          <input id="refuelAmount" type="number" inputmode="decimal" value="600" enterkeyhint="next" />
+          <small id="refuelLitres">— L at ₹—/L</small>
+        </div>
+
+        <label class="field">
+          <span>Was the tank filled to full?</span>
+          <select id="refuelFull" class="select">
+            <option value="full">Yes — full tank (accurate)</option>
+            <option value="partial">No — partial fill</option>
+          </select>
+        </label>
+
+        <div class="field">
+          <span>Fuel grade</span>
+          <div class="oct-grid" id="refuelOctGrid"></div>
+        </div>
+
+        <div class="grid2">
+          <label class="field">
+            <span>Ride type</span>
+            <select id="refuelScenario" class="select">
+              <option>City commute</option>
+              <option>Highway cruise</option>
+              <option>Hills / ghats</option>
+              <option>Pillion + luggage</option>
+              <option>Aggressive pace</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Date</span>
+            <input id="refuelDate" type="date" />
+          </label>
+        </div>
+
+        <button class="btn primary lg" id="refuelSaveBtn">Save fill-up</button>
+      </div>
+
+      <div class="card">
+        <div class="row between">
+          <div class="card-title">Fill-up history</div>
+          <span class="caps" id="refuelCount">0</span>
+        </div>
+        <div class="list" id="refuelHistory"></div>
+      </div>
+    </section>
+
+    <!-- ═════════ RADAR ═════════ -->
+    <section class="tab tab-map" id="tab-radar" data-tab="radar" hidden>
+      <div class="map-wrap" id="mapWrap">
+        <div id="map" class="map"></div>
+
+        <!-- Top overlay stack -->
+        <div class="map-top" id="mapTop">
+          <div class="gap-banner" id="gapBanner" hidden>
+            <span class="gap-ico">⚠️</span>
+            <div class="gap-text">
+              <b id="gapTitle">Rider behind</b>
+              <span id="gapSub">500 m+ gap</span>
+            </div>
+            <button class="btn xs white" id="gapPingBtn">Where are you?</button>
+          </div>
+
+          <div class="nav-banner" id="navBanner" hidden>
+            <div class="nav-maneuver" id="navIcon">⬆️</div>
+            <div class="nav-copy">
+              <b id="navPrimary">Continue</b>
+              <span id="navSub">—</span>
+            </div>
+            <div class="nav-dist" id="navDist">—</div>
+          </div>
+
+          <div class="searchbox" id="searchBox">
+            <div class="sb-row">
+              <span class="sb-dot start"></span>
+              <input id="originInput" type="text" placeholder="Your location" enterkeyhint="search" />
+              <button class="sb-swap" id="swapBtn" aria-label="Swap start and destination">⇅</button>
+            </div>
+            <div class="sb-div"></div>
+            <div class="sb-row">
+              <span class="sb-dot dest"></span>
+              <input id="destInput" type="text" placeholder="Where to?" enterkeyhint="go" autocomplete="off" />
+              <button class="sb-clear" id="destClear" aria-label="Clear destination" hidden>✕</button>
+              <button class="sb-mic" id="micBtn" aria-label="Search by voice">🎙</button>
+            </div>
+            <div class="stops-strip" id="stopsStrip" hidden></div>
+            <div class="sb-actions">
+              <button class="chip" id="addStopBtn">＋ Stop</button>
+              <button class="chip" id="routeBtn">Route</button>
+            </div>
+            <div class="ac" id="acList" hidden></div>
+          </div>
+
+          <div class="layer-strip" id="layerStrip">
+            <button class="pill active" data-layer="streets">Streets</button>
+            <button class="pill" data-layer="dark">Night</button>
+            <button class="pill" data-layer="satellite">Satellite</button>
+            <button class="pill" data-layer="terrain">Terrain</button>
+            <button class="pill sep" id="poiFuel">⛽ Fuel</button>
+            <button class="pill" id="poiFood">🍽 Food</button>
+            <button class="pill" id="poiRepair">🔧 Repair</button>
+          </div>
+        </div>
+
+        <!-- Floating right controls -->
+        <div class="map-fabs" id="mapFabs">
+          <button class="fab" id="fabLocate" aria-label="Center on me">➤</button>
+          <button class="fab" id="fabZoomIn" aria-label="Zoom in">＋</button>
+          <button class="fab" id="fabZoomOut" aria-label="Zoom out">－</button>
+          <button class="fab" id="fabPitch" aria-label="Toggle 3D view">3D</button>
+          <button class="fab" id="fabGroup" aria-label="Start a group ride">
+            <span>👥</span><i class="fab-badge" id="fabGroupBadge" hidden>0</i>
+          </button>
+        </div>
+
+        <!-- Lane guidance (nav) -->
+        <div class="nav-bottom" id="navBottom" hidden>
+          <div class="nav-progress"><i id="navProgressBar"></i></div>
+          <div class="nav-bottom-row">
+            <button class="nav-eta" id="navEtaBtn">
+              <b id="navEta">-- min</b>
+              <span id="navMeta">-- km • --</span>
+            </button>
+            <div class="nav-bottom-actions">
+              <button class="btn round ghost-dark" id="navGroupBtn" aria-label="Group">👥<i class="btn-badge" id="navGroupBadge" hidden>0</i></button>
+              <button class="btn round ghost-dark" id="navVoiceBtn" aria-label="Mute voice guidance">🔊</button>
+              <button class="btn round danger" id="navExitBtn">End</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Route preview sheet -->
+        <div class="route-sheet" id="routeSheet" hidden>
+          <div class="rs-head">
+            <div>
+              <div class="rs-eta"><b id="rsEta">-- min</b><span id="rsDist">-- km</span></div>
+              <div class="rs-sub" id="rsSub">Fastest route</div>
+              <div class="rs-note" id="rsNote">Estimates include fuel; tolls are indicative.</div>
+            </div>
+            <div class="rs-actions">
+              <button class="btn primary" id="rsStartBtn">Start</button>
+              <button class="btn ghost icon" id="rsStepsBtn" aria-label="Directions list">≡</button>
+              <button class="btn ghost icon" id="rsClearBtn" aria-label="Clear route">✕</button>
+            </div>
+          </div>
+          <div class="alts" id="alts" hidden></div>
+        </div>
+
+        <!-- Group sheet -->
+        <div class="group-bar" id="groupBar" hidden>
+          <button class="gb-btn" id="gbShare">Invite</button>
+          <div class="gb-riders" id="gbRiders"></div>
+          <button class="gb-btn" id="gbMe">My status</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═════════ INSIGHTS ═════════ -->
+    <section class="tab" id="tab-insights" data-tab="insights" hidden>
+      <div class="card">
+        <div class="card-title">Mileage trend</div>
+        <div class="card-sub">Full-tank windows, up to six</div>
+        <div class="chart" id="trendChart"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Cost per km</div>
+        <div class="card-sub">By fuel grade — uses today’s rate for your district</div>
+        <div class="list" id="costList"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Range by ride type</div>
+        <div class="card-sub">Rough model from your own logs and terrain</div>
+        <div class="list" id="rangeList"></div>
+      </div>
+      <div class="card">
+        <div class="row between">
+          <div class="card-title">Data</div>
+          <button class="chip" id="exportBtn">Export CSV</button>
+        </div>
+        <p class="card-sub">Everything is stored on this device. Export before clearing browser data.</p>
+      </div>
+    </section>
+
+    <!-- ═════════ GARAGE ═════════ -->
+    <section class="tab" id="tab-garage" data-tab="garage" hidden>
+      <div class="card">
+        <div class="row between">
+          <div class="card-title">My vehicles</div>
+          <button class="btn sm" id="addVehBtn">＋ Add</button>
+        </div>
+        <div class="list" id="garageList"></div>
+      </div>
+
+      <div class="card">
+        <div class="row between">
+          <div class="card-title">Profile</div>
+          <button class="btn ghost icon" id="logoutBtn" aria-label="Sign out">⏻</button>
+        </div>
+        <div class="grid2">
+          <label class="field"><span>Name</span><input id="profName" type="text" /></label>
+          <label class="field"><span>Phone</span><input id="profPhone" type="tel" /></label>
+        </div>
+        <div class="grid2">
+          <label class="field"><span>Units</span><select id="profUnits" class="select"><option value="metric">km / L</option></select></label>
+          <label class="field"><span>Motion</span><select id="profMotion" class="select"><option value="auto">Auto</option><option value="reduce">Reduce motion</option><option value="full">Full</option></select></label>
+        </div>
+        <button class="btn primary" id="profSaveBtn">Save profile</button>
+      </div>
+
+      <div class="card">
+        <div class="card-title">About</div>
+        <p class="card-sub">
+          ApexMile is a progressive web app. Add it to your Home Screen for full-screen use.
+          Group riding uses a public demo broker — rooms are unauthenticated, so only share a room
+          code with people you trust.
+        </p>
+        <div class="row gap8 wrap">
+          <a class="chip" href="#/privacy">Privacy</a>
+          <a class="chip" href="#/safety">Riding safety</a>
+          <span class="chip mono" id="buildTag">build</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═════════ PRIVACY ═════════ -->
+    <section class="tab" id="tab-privacy" data-tab="privacy" hidden>
+      <div class="card">
+        <div class="card-title">Privacy, plainly</div>
+        <div class="prose">
+          <p><b>On your device.</b> Your name, phone (if you add it), vehicles, fill-ups, odometer and photos are stored in this browser’s local storage. They are not uploaded to us — there is no “us” server.</p>
+          <p><b>When you join a group ride.</b> While a ride room is open, your display name, status (riding normal, fuel stop, SOS), live position and course are published to a public MQTT broker so other riders in the room can see you. Room codes are short and the broker is unauthenticated: anyone who knows or guesses the code can subscribe. Phone browsers pause location updates when the app is backgrounded or the screen is off — other riders will see a “not updating” state until you return.</p>
+          <p><b>What we deliberately do not send.</b> We do not send your phone number, your saved vehicles, your fill-up history or your photos in ride telemetry.</p>
+          <p><b>How to stop sharing.</b> End the ride, or close the tab. Share only while the ride is live; ending a ride removes you from the room and publishes a leave message.</p>
+          <p><b>Maps and routing.</b> Vector map tiles come from OpenFreeMap, satellite imagery from Esri, routing from OSRM, search from Nominatim, and nearby-place search from Overpass. Those requests include the coordinates or search terms you type.</p>
+          <p><b>Deleting your data.</b> Garage → sign out clears the account but keeps logs. To erase everything, clear site data for this app in your browser settings.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═════════ SAFETY ═════════ -->
+    <section class="tab" id="tab-safety" data-tab="safety" hidden>
+      <div class="card">
+        <div class="card-title">Ride safe</div>
+        <div class="prose">
+          <p><b>Set the route before you ride.</b> Pull over to type, change stops or invite riders. The map dims controls above walking pace for a reason.</p>
+          <p><b>Mount your phone.</b> Use a bar mount and keep it out of direct sun. A glove-friendly tap is better than a squeeze at speed.</p>
+          <p><b>The radar is an aid, not a rescue service.</b> Pack-gap alerts use GPS and can be wrong under tunnels, flyovers or dead zones. Do not rely on the app alone to keep a group together.</p>
+          <p><b>SOS is a status flag.</b> Marking a breakdown warns riders in your room. It does not contact emergency services. In an emergency, call 112.</p>
+          <p><b>Battery and data.</b> Live riding uses GPS and mobile data continuously. Carry a charger on long rides; save offline maps by keeping the app open on the radar screen before you go off-network.</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ═════════ Bottom tabs ═════════ -->
+  <nav class="tabbar" id="tabbar" aria-label="Main">
+    <button class="tb active" data-tab="home">
+      <svg viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V21a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z"/></svg><span>Home</span>
+    </button>
+    <button class="tb" data-tab="refuel">
+      <svg viewBox="0 0 24 24"><path d="M5 21V5a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v16"/><path d="M4 21h12"/><path d="M15 9h2a3 3 0 0 1 3 3v5a1.5 1.5 0 0 0 3 0v-6l-3-3"/><path d="M7 8h6"/></svg><span>Refuel</span>
+    </button>
+    <button class="tb" data-tab="radar">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="2"/><path d="M12 2a10 10 0 1 1 0 20 10 10 0 0 1 0-20"/><path d="M12 6a6 6 0 1 1 0 12"/></svg><span>Radar</span>
+    </button>
+    <button class="tb" data-tab="insights">
+      <svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg><span>Insights</span>
+    </button>
+    <button class="tb" data-tab="garage">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span>Garage</span>
+    </button>
+  </nav>
+</div>
+
+<!-- ═════════ Sheet host ═════════ -->
+<div class="sheet-host" id="sheetHost" hidden>
+  <div class="sheet-backdrop" id="sheetBackdrop"></div>
+  <div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+    <div class="sheet-grip" id="sheetGrip"></div>
+    <div class="sheet-head">
+      <h2 id="sheetTitle">Sheet</h2>
+      <button class="icon-btn" id="sheetClose" aria-label="Close">✕</button>
+    </div>
+    <div class="sheet-body" id="sheetBody"></div>
+  </div>
+</div>
+
+<!-- ═════════ Toasts ═════════ -->
+<div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+
+<!-- ═════════ Sheet templates ═════════ -->
+<template id="tpl-vehicle">
+  <form class="form" id="vehForm">
+    <div class="seg" id="vehTypeSeg">
+      <button type="button" class="seg-b active" data-type="Bike">🏍 Bike</button>
+      <button type="button" class="seg-b" data-type="Car">🚗 Car</button>
+    </div>
+    <label class="field"><span>Name</span><input name="name" type="text" placeholder="e.g. RE Himalayan 450" required /></label>
+    <div class="grid2">
+      <label class="field"><span>Odometer (km)</span><input name="odo" type="number" inputmode="numeric" value="0" required /></label>
+      <label class="field"><span>Mileage (km/L)</span><input name="kmpl" type="number" inputmode="decimal" step="0.1" value="30" required /></label>
+    </div>
+    <div class="grid2">
+      <label class="field"><span>Tank (L)</span><input name="tank" type="number" inputmode="decimal" step="0.1" value="13" required /></label>
+      <label class="field"><span>Reserve (L)</span><input name="reserve" type="number" inputmode="decimal" step="0.1" value="2.5" required /></label>
+    </div>
+    <div class="grid2">
+      <label class="field"><span>Preferred grade</span>
+        <select name="octane" class="select"><option value="91">91</option><option value="95" selected>95</option><option value="100">100</option></select>
+      </label>
+      <label class="field"><span>Photo</span><input name="photo" type="file" accept="image/*" /></label>
+    </div>
+    <div class="sheet-actions">
+      <button type="button" class="btn ghost" data-close>Cancel</button>
+      <button type="submit" class="btn primary">Save vehicle</button>
+    </div>
+  </form>
+</template>
+
+<template id="tpl-odometer">
+  <form class="form" id="odoForm">
+    <label class="field"><span>Current odometer (km)</span><input name="odo" type="number" inputmode="numeric" required /></label>
+    <p class="hint">Editing the odometer backwards will distort mileage. We keep a note in the log when you do.</p>
+    <div class="sheet-actions">
+      <button type="button" class="btn ghost" data-close>Cancel</button>
+      <button type="submit" class="btn primary">Update</button>
+    </div>
+  </form>
+</template>
+
+<template id="tpl-prices">
+  <form class="form" id="priceForm">
+    <p class="hint" id="priceHint">Rates for your district. Update them from the pump board if they drift.</p>
+    <label class="field"><span>91 octane (₹/L)</span><input name="p91" type="number" step="0.01" required /></label>
+    <label class="field"><span>95 octane (₹/L)</span><input name="p95" type="number" step="0.01" required /></label>
+    <label class="field"><span>100 octane (₹/L)</span><input name="p100" type="number" step="0.01" required /></label>
+    <div class="sheet-actions">
+      <button type="button" class="btn ghost" data-close>Cancel</button>
+      <button type="submit" class="btn primary">Save rates</button>
+    </div>
+  </form>
+</template>
+
+<template id="tpl-chain">
+  <div class="form">
+    <p class="hint" id="chainBody">Chain maintenance</p>
+    <div class="meter"><i id="chainMeter"></i></div>
+    <div class="sheet-actions">
+      <button type="button" class="btn ghost" data-close>Close</button>
+      <button type="button" class="btn primary" id="chainReset">I serviced it now</button>
+    </div>
+  </div>
+</template>
+
+<template id="tpl-trip">
+  <form class="form" id="tripForm">
+    <label class="field"><span>Trip name</span><input name="trip" type="text" value="Sunday ride" required /></label>
+    <label class="field"><span>Destination (optional)</span><input name="dest" type="text" placeholder="e.g. Nandi Hills" /></label>
+    <p class="hint">Starting a ride shares your live position with everyone in the room until you end it.</p>
+    <div class="sheet-actions">
+      <button type="button" class="btn ghost" data-close>Cancel</button>
+      <button type="submit" class="btn primary">Start ride</button>
+    </div>
+  </form>
+  <button type="button" class="btn ghost wide" id="joinRideLink">Have a room code? Join a ride</button>
+</template>
+
+<template id="tpl-invite">
+  <div class="form">
+    <p class="hint">Show this to the riders behind you, or share the link.</p>
+    <div class="qr-wrap"><canvas id="qrCanvas" width="220" height="220"></canvas></div>
+    <div class="invite-code" id="inviteCode">RIDE-000</div>
+    <div class="invite-url mono" id="inviteUrl"></div>
+    <div class="sheet-actions">
+      <button type="button" class="btn ghost" id="copyInvite">Copy link</button>
+      <button type="button" class="btn primary" id="shareInvite">Share</button>
+    </div>
+    <button type="button" class="btn danger wide" id="endRideBtn">End ride for everyone</button>
+  </div>
+</template>
+
+<template id="tpl-rider">
+  <div class="form" id="riderBody"></div>
+</template>
+
+<template id="tpl-status">
+  <div class="form">
+    <div class="status-grid" id="statusGrid"></div>
+  </div>
+</template>
+
+<template id="tpl-stops">
+  <form class="form" id="stopsForm">
+    <div class="row gap8">
+      <input name="stop" type="text" class="grow" placeholder="Add a stop" autocomplete="off" enterkeyhint="done" />
+      <button type="submit" class="btn primary sm">Add</button>
+    </div>
+    <select name="pos" class="select slim">
+      <option value="before_dest">Before destination</option>
+      <option value="first_start">As first stop</option>
+      <option value="last_dest">As final destination</option>
+    </select>
+    <div class="stop-list" id="stopList"></div>
+    <div class="sheet-actions">
+      <button type="button" class="btn ghost" id="clearStopsBtn">Clear stops</button>
+      <button type="button" class="btn primary" id="stopsDoneBtn">Done</button>
+    </div>
+  </form>
+</template>
+
+<template id="tpl-steps">
+  <div class="form"><div class="steps" id="stepsList"></div></div>
+</template>
+
+<template id="tpl-profile">
+  <form class="form" id="profileForm">
+    <div class="grid2">
+      <label class="field"><span>Name</span><input name="name" type="text" /></label>
+      <label class="field"><span>Phone</span><input name="phone" type="tel" /></label>
+    </div>
+    <label class="field"><span>Theme</span>
+      <select name="theme" class="select"><option value="auto">Auto (system)</option><option value="light">Light</option><option value="dark">Dark</option></select>
+    </label>
+    <div class="sheet-actions">
+      <button type="button" class="btn ghost" id="profSignOut">Sign out</button>
+      <button type="submit" class="btn primary">Save</button>
+    </div>
+  </form>
+</template>
+
+<!-- ═════════ External libs (bundled, same-origin, versioned) ═════════ -->
+<script src="assets/vendor/maplibre-gl.js"></script>
+<script src="assets/vendor/mqtt.min.js"></script>
+<script src="assets/vendor/qrcode.js"></script>
+
+<!-- ═════════ App modules ═════════ -->
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
