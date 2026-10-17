@@ -555,21 +555,31 @@ function gmapsDirectionsUrl() {
     + `&destination=${to.lat},${to.lng}&travelmode=${travelmode}`;
 }
 
-/** Traffic-map handoff: Google Maps opened on this area with live traffic on. */
-function gmapsTrafficUrl() {
-  const map = mapCtl.mapCtl.map;
-  const c = map?.getCenter?.() || geo.pos || { lat: 12.9716, lng: 77.5946 };
-  const z = (map?.getZoom?.() || 13).toFixed(1);
-  return `https://www.google.com/maps/@${c.lat},${c.lng},${z}z/data=!5m1!1e1`;
+/**
+ * The route sheet is a bottom card whose height follows its content. Publish
+ * the measured height so the FABs and the attribution can sit exactly above
+ * it instead of guessing a fixed offset and landing on top of the card.
+ */
+function syncSheetHeight() {
+  const sheet = $('#routeSheet');
+  if (!sheet || sheet.hidden) {
+    document.body.style.removeProperty('--sheet-h');
+    return;
+  }
+  requestAnimationFrame(() => {
+    const h = Math.max(120, sheet.offsetHeight || 0);
+    document.body.style.setProperty('--sheet-h', `${h + 12}px`);
+  });
 }
 
 function initRadarUi() {
   $('#searchBox')?.addEventListener('click', () => expandSearch(false));
-  $('#gmapsPill')?.addEventListener('click', () => openExternal(gmapsTrafficUrl()));
+  $('#rsStartBtn')?.addEventListener('click', startPlannedNavigation);
   $('#rsGmapsBtn')?.addEventListener('click', () => {
     const url = gmapsDirectionsUrl();
     if (url) openExternal(url);
   });
+  window.addEventListener('resize', syncSheetHeight);
   $('#fabZoomIn')?.addEventListener('click', () => mapCtl.mapCtl.map?.zoomIn());
   $('#fabZoomOut')?.addEventListener('click', () => mapCtl.mapCtl.map?.zoomOut());
   $('#fabPitch')?.addEventListener('click', () => {
@@ -898,6 +908,7 @@ function onJourneyUpdate({ cleared } = {}) {
     const etas = $('#modeEtas');
     if (etas) etas.hidden = true;
     collapseSearch();
+    syncSheetHeight();
     refreshModeUi();
     return;
   }
@@ -905,6 +916,7 @@ function onJourneyUpdate({ cleared } = {}) {
   if (journey.loading) {
     sheet.hidden = false;
     document.body.classList.add('has-sheet');
+    $('#rsDest').textContent = journey.dest.name;
     $('#rsEta').textContent = 'Planning…';
     $('#rsDist').textContent = '';
     $('#rsSub').textContent = `Best ${MODE_META[journey.mode]?.label.toLowerCase() || ''} route`;
@@ -912,6 +924,7 @@ function onJourneyUpdate({ cleared } = {}) {
     const cost = $('#rsCost');
     if (cost) cost.hidden = true;
     refreshModeUi();
+    syncSheetHeight();
     return;
   }
 
@@ -919,6 +932,7 @@ function onJourneyUpdate({ cleared } = {}) {
   if (!route) {
     if (journey.error) {
       sheet.hidden = false;
+      $('#rsDest').textContent = journey.dest.name;
       $('#rsEta').textContent = 'No route';
       $('#rsDist').textContent = '';
       $('#rsSub').textContent = journey.error;
@@ -926,6 +940,7 @@ function onJourneyUpdate({ cleared } = {}) {
       $('#alts').hidden = true;
       const cost = $('#rsCost');
       if (cost) cost.hidden = true;
+      syncSheetHeight();
     }
     refreshModeUi();
     return;
@@ -934,6 +949,7 @@ function onJourneyUpdate({ cleared } = {}) {
   const est = estimates(route);
   sheet.hidden = false;
   document.body.classList.add('has-sheet');
+  $('#rsDest').textContent = journey.dest.name;
 
   const mins = Math.max(1, Math.round(route.duration / 60));
   $('#rsEta').textContent = mins < 60 ? `${mins} min` : `${Math.floor(mins / 60)} hr ${mins % 60} min`;
@@ -968,6 +984,7 @@ function onJourneyUpdate({ cleared } = {}) {
   renderRouteCost(route);
   refreshModeUi();
   syncCaptainDestination();
+  syncSheetHeight();
 
   if (est.mode === 'car') ensureTolls(route);
 }
@@ -980,16 +997,24 @@ function refreshModeUi() {
     b.setAttribute('aria-pressed', on ? 'true' : 'false');
   });
   const go = $('#directionsBtn');
-  if (!go) return;
   const typed = ($('#destInput')?.value || '').trim();
   const pending = Boolean(typed) && (
     !journey.dest || typed.toLowerCase() !== String(journey.dest.name).toLowerCase()
   );
-  const ready = Boolean(journey.dest && currentRoute()) && !pending;
-  go.textContent = ready ? 'Start ride' : 'Directions';
-  go.classList.toggle('ready', ready);
-  go.setAttribute('aria-label', ready ? 'Start navigation' : 'Show directions');
-  go.disabled = Boolean(journey.loading);
+  const ready = Boolean(journey.dest && currentRoute()) && !pending && !journey.loading;
+  if (go) {
+    go.textContent = ready ? 'Start ride' : 'Directions';
+    go.classList.toggle('ready', ready);
+    go.setAttribute('aria-label', ready ? 'Start navigation' : 'Show directions');
+    go.disabled = Boolean(journey.loading);
+  }
+  // The route sheet's Start is the primary CTA once a plan exists — it must
+  // never leave the screen just because the search panel folded to one bar.
+  const start = $('#rsStartBtn');
+  if (start) {
+    start.disabled = !ready;
+    start.hidden = !journey.dest;
+  }
 }
 
 function onDirectionsPressed() {
@@ -1139,6 +1164,8 @@ async function startPlannedNavigation() {
     btn.disabled = true;
     btn.textContent = 'Starting…';
   }
+  const rsStart = $('#rsStartBtn');
+  if (rsStart) rsStart.disabled = true;
 
   try {
     // If we planned from "my location" a while ago, re-plan from where we are now.
@@ -1674,9 +1701,11 @@ function wireBus() {
       if (clear) clear.hidden = false;
       const coords = currentRoute().meta?.coords;
       if (coords) mapCtl.fitRoute(coords, { paddingBottom: 270, bearing: 0, pitch: 0 });
+      syncSheetHeight();
     } else {
       if (routeSheet) routeSheet.hidden = true;
       document.body.classList.remove('has-sheet');
+      syncSheetHeight();
     }
     updateGroupUi();
   });

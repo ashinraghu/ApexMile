@@ -559,7 +559,7 @@ b{ font-weight:800; }
 .sb-go.ready{ background:var(--green); }
 
 /* Route sheet: comparable mode ETAs + cost breakdown */
-.mode-etas{ display:flex; gap:6px; margin-top:10px; }
+.mode-etas{ display:flex; gap:6px; }
 .mode-eta{
   flex:1; min-height:44px; padding:6px 4px; border-radius:11px;
   background:var(--bg-sunk); border:1.5px solid transparent;
@@ -648,7 +648,7 @@ body[data-tab="radar"] .tabbar{ background:var(--glass-strong); }
 .maplibregl-ctrl-attrib a{ color:var(--text-2) !important; }
 .maplibregl-ctrl-bottom-right{ z-index:2; }
 body.in-ride .maplibregl-ctrl-bottom-right{ bottom:64px; }
-body.has-sheet .maplibregl-ctrl-bottom-right{ bottom:150px; }
+body.has-sheet .maplibregl-ctrl-bottom-right{ bottom:var(--sheet-h, 150px); }
 body.navigating .maplibregl-ctrl-bottom-right{ bottom:104px; }
 
 /* overlays */
@@ -813,7 +813,7 @@ body.navigating .maplibregl-ctrl-bottom-right{ bottom:104px; }
 .fab:active{ transform:scale(.92); }
 .fab.on{ background:var(--blue); color:#fff; border-color:transparent; }
 body.in-ride .map-fabs{ bottom:calc(16px + 58px); }
-body.has-sheet .map-fabs{ bottom:calc(16px + 200px); }
+body.has-sheet .map-fabs{ bottom:calc(16px + var(--sheet-h, 220px)); }
 body.has-sheet .group-bar{ display:none !important; }
 body.navigating .map-fabs{ bottom:96px; }
 body.navigating.has-sheet .map-fabs{ bottom:calc(96px + 180px); }
@@ -821,25 +821,48 @@ body.navigating.has-sheet .map-fabs{ bottom:calc(96px + 180px); }
 /* route preview sheet */
 .route-sheet{
   position:absolute; z-index:6; left:0; right:0; bottom:0;
-  margin:0 10px 10px calc(var(--safe-l) + 10px);
-  padding:14px 14px calc(12px);
+  margin:0 calc(var(--safe-r) + 10px) 10px calc(var(--safe-l) + 10px);
+  padding:14px 14px 12px;
   border-radius:var(--r-xl);
   background:var(--glass-strong);
   backdrop-filter:blur(26px) saturate(190%);
   -webkit-backdrop-filter:blur(26px) saturate(190%);
   border:1px solid var(--line);
   box-shadow:var(--shadow-3);
+  display:flex; flex-direction:column; gap:11px;
+  max-height:min(54vh, 430px);
+  overflow:hidden;
   animation:sheetup .32s var(--ease-out);
 }
 @keyframes sheetup{ from{ transform:translateY(16px); opacity:0;} to{ transform:none; opacity:1;} }
-.rs-head{ display:flex; justify-content:space-between; align-items:flex-start; gap:10px; }
+.rs-head{ display:flex; justify-content:space-between; align-items:flex-start; gap:10px; flex:none; }
+.rs-title{ min-width:0; }
+.rs-dest{
+  font-size:15px; font-weight:900; letter-spacing:-.01em;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-bottom:2px;
+}
 .rs-eta{ display:flex; align-items:baseline; gap:7px; }
 .rs-eta b{ font-size:24px; font-weight:900; color:var(--green); letter-spacing:-.03em; }
 .rs-eta span{ font-size:13px; font-weight:800; color:var(--text-2); }
 .rs-sub{ font-size:11.5px; font-weight:700; color:var(--text-2); margin-top:3px; }
-.rs-note{ font-size:10px; color:var(--text-3); margin-top:3px; max-width:220px; line-height:1.4; }
+.rs-note{ font-size:10px; color:var(--text-3); line-height:1.45; }
 .rs-actions{ display:flex; gap:6px; align-items:center; flex:none; }
-.alts{ display:flex; gap:6px; overflow-x:auto; margin-top:11px; padding-top:10px; border-top:1px solid var(--line); scrollbar-width:none; }
+/* The primary CTA, unmissable like Google's Start button. */
+.rs-start{
+  flex:none; width:100%; min-height:46px; gap:8px;
+  justify-content:center; border-radius:14px;
+  background:var(--green); color:#fff;
+  font-size:15px; font-weight:900; letter-spacing:.01em;
+  box-shadow:0 8px 20px -10px rgba(14,159,110,.8);
+}
+.rs-start .glyph{ width:18px; height:18px; display:block; }
+.rs-start:disabled{ opacity:.55; box-shadow:none; }
+.rs-body{
+  min-height:0; overflow-y:auto; -webkit-overflow-scrolling:touch;
+  display:flex; flex-direction:column; gap:9px;
+}
+.rs-body .rs-cost{ margin-top:0; padding-top:9px; border-top:1px solid var(--line); }
+.alts{ display:flex; gap:6px; overflow-x:auto; padding-top:9px; border-top:1px solid var(--line); scrollbar-width:none; }
 .alts::-webkit-scrollbar{ display:none; }
 .alt{
   flex:none; padding:7px 12px; border-radius:var(--r-sm);
@@ -1234,7 +1257,8 @@ body.navigating .mk-me .core{ display:none; }
   body[data-tab="radar"] .map-wrap{ top:0; bottom:0; }
   .map-top{ width:340px; max-width:46vw; }
   .map-fabs{ right:var(--safe-r); }
-  .route-sheet,.nav-bottom{ left:auto; width:min(420px,48vw); }
+  .route-sheet{ left:auto; right:calc(var(--safe-r) + 10px); width:min(420px,48vw); margin:0 0 10px; }
+  .nav-bottom{ left:auto; width:min(420px,48vw); }
 }
 
 /* ==========================================================================
