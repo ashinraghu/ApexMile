@@ -422,6 +422,29 @@ function initSettings() {
  * bundle — it is public the moment it is committed — so the rider pastes their
  * own, it is stored in this browser, and the overlay is optional.
  */
+/**
+ * Prove a TomTom key before turning the pill on: exactly one tile request.
+ * Returns 'ok' | 'rejected' | 'quota' | 'unreachable'. A "rejected" verdict
+ * is almost always a key created in TomTom's new portal without the Traffic
+ * products enabled on it — until now the app accepted it silently and the
+ * overlay simply never appeared.
+ */
+async function probeTrafficKey(key) {
+  try {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 9000);
+    let res;
+    try { res = await fetch(mapCtl.trafficProbeUrl(key), { signal: ctl.signal, cache: 'no-store' }); }
+    finally { clearTimeout(timer); }
+    if (res.ok) return 'ok';
+    if (res.status === 401 || res.status === 403) return 'rejected';
+    if (res.status === 429) return 'quota';
+    return 'unreachable';
+  } catch {
+    return 'unreachable';
+  }
+}
+
 function openTrafficSheet() {
   const current = state.trafficKey || '';
   openSheet({
@@ -433,8 +456,11 @@ function openTrafficSheet() {
         <input id="trafficKeyInput" type="text" autocomplete="off" autocapitalize="off"
           spellcheck="false" placeholder="Paste your key" value="${esc(current)}" />
       </label>
-      <p class="hint">Create one at <b>developer.tomtom.com</b> → My Dashboard → Keys, and restrict it
-        to this domain. The key stays on this device and is never part of the app bundle.</p>
+      <p class="hint" id="trafficKeyStatus" role="status" hidden></p>
+      <p class="hint">Create one at <b>developer.tomtom.com</b> → API &amp; SDK Keys, and on that key
+        enable the <b>Traffic</b> products (simplest: select all available products). If you set a
+        domain restriction, include this app's domain. The key is verified against TomTom before it
+        is saved, and it never leaves this device.</p>
       <div class="sheet-actions">
         ${current
           ? '<button class="btn ghost" type="button" id="trafficRemove">Remove key</button>'
@@ -443,9 +469,23 @@ function openTrafficSheet() {
       </div>`,
     mount(body) {
       const input = body.querySelector('#trafficKeyInput');
-      body.querySelector('#trafficSave')?.addEventListener('click', () => {
+      const saveBtn = body.querySelector('#trafficSave');
+      const statusEl = body.querySelector('#trafficKeyStatus');
+      saveBtn?.addEventListener('click', async () => {
         const key = (input?.value || '').trim();
         if (key.length < 16) return toast('That key looks too short — paste the whole key', { type: 'warn' });
+        saveBtn.disabled = true;
+        if (statusEl) { statusEl.hidden = false; statusEl.textContent = 'Checking the key with TomTom…'; }
+        const verdict = await probeTrafficKey(key);
+        saveBtn.disabled = false;
+        if (verdict === 'rejected') {
+          if (statusEl) {
+            statusEl.textContent = 'TomTom refused this key (401/403). Open the key at developer.tomtom.com '
+              + 'and enable the Traffic products on it — or select all available products — then try again. '
+              + 'Also check that any domain restriction includes this app.';
+          }
+          return false;
+        }
         state.trafficKey = key;
         state.trafficOn = true;
         saveNow();
@@ -453,7 +493,10 @@ function openTrafficSheet() {
         mapCtl.setTraffic(true);
         syncLayerPills();
         closeSheet();
-        toast('Live traffic on', { ms: 2200 });
+        toast(verdict === 'quota' || verdict === 'unreachable'
+          ? 'Saved — traffic will draw as soon as TomTom answers'
+          : 'Key verified — live traffic on', { ms: 2600 });
+        return true;
       });
       body.querySelector('#trafficRemove')?.addEventListener('click', () => {
         state.trafficKey = '';
@@ -1489,13 +1532,14 @@ function wireBus() {
     mapCtl.recenter({ lat, lng }, { zoom: 16, duration: 600 });
   });
 
-  bus.on('traffic:error', () => {
-    // The key was rejected (invalid, expired, or domain-restricted elsewhere).
-    state.trafficOn = false;
-    saveNow();
-    mapCtl.setTraffic(false);
+  bus.on('traffic:error', ({ status } = {}) => {
+    // map.js has already detached the overlay for this session. Do NOT wipe
+    // the saved toggle: a midnight quota reset or a fixed key should quietly
+    // start working again on the next launch.
     syncLayerPills();
-    toast('TomTom rejected the traffic key — update it in Ride settings', { type: 'err', ms: 5200 });
+    toast(status === 429
+      ? 'TomTom\'s daily tile quota is used up — traffic returns when it resets'
+      : 'TomTom refused the traffic key — enable the Traffic products on the key, then save it again in Ride settings', { type: 'err', ms: 6500 });
   });
 
   bus.on('region:detect', () => detectRegion(true));

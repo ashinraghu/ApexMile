@@ -219,3 +219,36 @@ Still not verified here: a physical iPhone/Android, real GPS, real broker reacha
 - ESLint 0 errors / 0 warnings; esbuild resolves all imports; `node --check` on every touched module.
 
 Still not verified here: a physical iPhone/Android, real GPS, a real TomTom key, and mobile-network broker reachability.
+
+---
+
+## Part 7 — v11.2.1: bike ETAs that beat cars, one broker per room, and a traffic key that proves itself
+
+Three field reports from the first v11.2 rides, all reproduced from the code.
+
+### 1. A bike ETA must never read worse than the same trip by car
+
+- **Root cause.** "Bike" routes were sent to Valhalla's *bicycle* costing: 15–20 km/h push-bike speeds against the car card's free-flow OSRM times. The fallback model made it worse (25/33/44 km/h fixed speeds with no reference to the car estimate at all).
+- **Fix.** Bike now costs as Valhalla's **motorcycle** profile — bike-legal roads at motorcycle speeds. Both engines only understand free-flow, so `modeledBikeSeconds()` applies an urban trim over the same free-flow baseline (a motorcycle filters through queues cars sit in: ×0.82 under 12 km, ×0.95 under 45 km, untouched beyond), with a plausibility floor (never faster than 40/55 km/h moving average) that binds only on trimmed legs — open-road times pass through. The OSRM fallback derives the bike number *from* OSRM's own free-flow car seconds, so the bike card and the car card can never contradict each other.
+- Verified in Node: city 10 km → bike 15.0 min vs car 17.7 min; highway 60 km → 45.0 vs 47.3; trim floor holds.
+
+### 2. Group ride: joined riders were invisible to each other
+
+- **Root cause A (the big one).** The fail-over broker list plus a per-device "sticky broker" scattered room members across *different public brokers*. Public brokers are islands — same room code or not, a rider on EMQX and a rider on HiveMQ never see each other. Exactly matches "joins by code/QR/link don't reflect on either app."
+- **Fix A.** The room code deterministically picks the broker (`hash(code) % brokers`) — the code names the room, so the code also names where the room meets. Everyone who types or scans the same code tries the same endpoint first; fallbacks remain for when that one is blocked. The sticky-broker heuristic is gone, the defunct Eclipse broker was removed (the Eclipse Foundation shut it down), and HiveMQ's alternate hostname was added as another path for hostile networks.
+- **Root cause B.** Presence was announced the instant TCP connected, *before* the subscription landed: the room's reply to our own hello could arrive before we could hear it.
+- **Fix B.** Hello + first position now publish on SUBACK (with a 1.5 s bailout for brokers that never answer it).
+- **Root cause C.** Heartbeats stopped while the screen was hidden. Riders pocket their phones; pockets go stale at 38 s and are dropped at 125 s — the whole pack vanishes mid-ride.
+- **Fix C.** The 12 s heartbeat now keeps flowing in the background (movement publishes still need real motion).
+
+### 3. Live Traffic stayed dark even with a "successful" TomTom key
+
+- **Root cause.** Since TomTom's new portal (2025→), keys are created with *per-product* access; a key without the Traffic products answers 401/403 on the flow tiles. The app accepted any 16+ character string, called it "Live traffic on", and painted nothing; the runtime handler then wiped the saved toggle and blamed the key. A 429 (daily quota used) wasn't recognised at all.
+- **Fix.** Saving a key now **proves it first**: one real tile fetch over Bengaluru before anything is saved (`trafficProbeUrl`). A 401/403 keeps the sheet open and says exactly what to do in the portal (enable the Traffic products, check domain restrictions); unreachable/quota still saves (off-grid is a bad time to be strict). A runtime 401/403/429 detaches the overlay for the session and explains itself — but no longer deletes the key or the saved preference, so a fixed key or a midnight quota reset just starts working again. Sheet copy updated for the new portal (API & SDK Keys → select the Traffic products).
+- SW cache bumped to `apexmile-v11.2.1` so installed PWAs pick up all of this.
+
+### Verification
+
+- Node smoke run against the built modules: five ETA assertions + probe-URL assertions — **all pass**; `node --check` on every touched module (`routing`, `rooms`, `map`, `main`, `sw`) — clean.
+
+Still not verified here: real TomTom key with the products enabled, real multi-phone MQTT room across carriers, and physical iPhone/Android GPS — these need devices, not a sandbox.
