@@ -376,6 +376,7 @@ b{ font-weight:800; }
 
 .seg{ display:flex; gap:4px; padding:4px; background:var(--bg-sunk); border-radius:var(--r-md); margin-bottom:14px; }
 .seg-b{ flex:1; min-height:40px; border-radius:10px; font-size:13.5px; font-weight:800; color:var(--text-3); }
+.seg-b .glyph{ width:15px; height:15px; vertical-align:-2.5px; margin-right:3px; }
 .seg-b.active{ background:var(--bg-elev); color:var(--text); box-shadow:var(--shadow-1); }
 
 /* ==========================================================================
@@ -390,6 +391,7 @@ b{ font-weight:800; }
   font-size:12.5px; font-weight:800; box-shadow:var(--shadow-1);
 }
 .veh-chip.active{ background:var(--accent); border-color:var(--accent); color:#fff; box-shadow:0 6px 16px -8px rgba(255,85,0,.9); }
+.veh-chip .glyph{ width:15px; height:15px; }
 
 .hero{ padding:18px 18px 14px; border-radius:var(--r-xl); }
 .hero-top{ display:flex; align-items:center; justify-content:space-between; gap:8px; }
@@ -403,6 +405,7 @@ b{ font-weight:800; }
   display:grid; place-items:center; font-size:16px; overflow:hidden;
 }
 .veh-thumb img{ width:100%; height:100%; object-fit:cover; }
+.veh-thumb .glyph{ width:17px; height:17px; }
 .pencil{ font-size:10.5px; font-weight:900; color:var(--accent); text-transform:uppercase; letter-spacing:.05em; }
 .odo-badge{
   display:inline-flex; align-items:center; gap:6px; min-height:34px; padding:0 12px;
@@ -434,6 +437,7 @@ b{ font-weight:800; }
 }
 .tile:active{ transform:scale(.975); }
 .tile-ico{ font-size:21px; line-height:1; margin-bottom:auto; }
+.tile-ico .glyph{ width:21px; height:21px; display:block; }
 .tile-t{ font-size:13.5px; font-weight:900; }
 .tile-s{ font-size:11px; font-weight:700; color:var(--text-3); }
 .t1{ background:linear-gradient(150deg,var(--accent-soft),transparent 60%),var(--bg-elev); }
@@ -541,11 +545,17 @@ b{ font-weight:800; }
   background:var(--bg-sunk); color:var(--text-2);
   font-size:12px; font-weight:800; white-space:nowrap;
 }
+.mode-btn .glyph{ width:15px; height:15px; flex:none; }
 .mode-btn.active{
   background:var(--accent-soft); color:var(--accent);
   box-shadow:inset 0 0 0 1.5px var(--accent);
 }
-.sb-go{ margin:0 10px 10px; width:calc(100% - 20px); justify-content:center; }
+/* The Start action stays small and near the bottom of the expanded panel. */
+.sb-go{
+  margin:0 10px 10px auto; width:auto; min-height:34px;
+  padding:0 16px; border-radius:var(--r-pill); justify-content:center;
+  font-size:12.5px; letter-spacing:.01em;
+}
 .sb-go.ready{ background:var(--green); }
 
 /* Route sheet: comparable mode ETAs + cost breakdown */
@@ -557,6 +567,7 @@ b{ font-weight:800; }
   font-size:10px; font-weight:800; color:var(--text-3); text-transform:uppercase; letter-spacing:.04em;
 }
 .mode-eta b{ font-size:13px; color:var(--text); text-transform:none; letter-spacing:0; }
+.mode-eta .glyph{ width:13px; height:13px; vertical-align:-2.5px; }
 .mode-eta.active{ border-color:var(--blue); background:var(--blue-soft); color:var(--blue); }
 .mode-eta.active b{ color:var(--blue); }
 .rs-cost{
@@ -721,6 +732,23 @@ body.navigating .maplibregl-ctrl-bottom-right{ bottom:104px; }
   background:var(--bg-sunk);
 }
 .sb-mic{ background:transparent; }
+.sb-swap .glyph,.sb-mic .glyph{ width:17px; height:17px; }
+.sb-mic.rec .glyph{ display:none; }
+.sb-mic.rec::after{
+  content:""; width:11px; height:11px; border-radius:50%; background:var(--red);
+}
+
+/* One search bar at rest. Tapping it expands the origin/destination fields,
+   the mode row and the Start action — the map stays visible around it. */
+.sb-lead{ display:none; width:19px; height:19px; flex:none; color:var(--text-3); }
+.sb-lead .glyph{ width:19px; height:19px; display:block; }
+.searchbox:not(.expanded) .sb-lead{ display:block; }
+.searchbox:not(.expanded) .sb-dot.dest{ display:none; }
+.searchbox:not(.expanded) .sb-row-origin,
+.searchbox:not(.expanded) .sb-div,
+.searchbox:not(.expanded) .sb-swap,
+.searchbox:not(.expanded) .mode-row,
+.searchbox:not(.expanded) .sb-go{ display:none; }
 
 
 /* autocomplete */
@@ -740,6 +768,7 @@ body.navigating .maplibregl-ctrl-bottom-right{ bottom:104px; }
   width:32px; height:32px; flex:none; border-radius:9px; display:grid; place-items:center;
   background:var(--bg-sunk); font-size:15px;
 }
+.ac-ico .glyph{ width:15px; height:15px; }
 .ac-mid{ flex:1; min-width:0; }
 .ac-t{ font-size:13.5px; font-weight:800; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .ac-s{ font-size:11px; color:var(--text-3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:1px; }
@@ -835,6 +864,7 @@ body.navigating.has-sheet .map-fabs{ bottom:calc(96px + 180px); }
 }
 #gbChat{ padding:0 11px; font-size:14px; }
 #gbChat .btn-badge{ top:-3px; right:-3px; }
+#gbChat .glyph{ width:16px; height:16px; display:block; }
 .gb-btn:first-child{ background:var(--accent); color:#fff; }
 .gb-riders{ flex:1; display:flex; gap:7px; align-items:center; overflow-x:auto; scrollbar-width:none; }
 .gb-riders::-webkit-scrollbar{ display:none; }
@@ -1048,7 +1078,7 @@ body.navigating .mk-me .core{ display:none; }
   background:#E02D2D; border:2.5px solid #fff; box-shadow:0 4px 10px rgba(0,0,0,.35);
   display:grid; place-items:center;
 }
-.mk-dest span{ transform:rotate(45deg); font-size:13px; }
+.mk-dest .glyph{ transform:rotate(45deg); width:15px; height:15px; color:#fff; }
 .mk-stop{
   width:24px; height:24px; border-radius:50%; background:#fff; border:2.5px solid #0F172A;
   color:#0F172A; font-size:11px; font-weight:900; display:grid; place-items:center;
@@ -1124,6 +1154,7 @@ body.navigating .mk-me .core{ display:none; }
   background:var(--bg-sunk); font-size:13px; font-weight:800; text-align:left;
   display:flex; align-items:center; gap:9px;
 }
+.status-b .glyph{ width:17px; height:17px; flex:none; }
 .status-b.sos{ grid-column:span 2; background:var(--red); color:#fff; }
 .status-b.on{ background:var(--green-soft); color:var(--green); }
 
@@ -1176,6 +1207,7 @@ body.navigating .mk-me .core{ display:none; }
 }
 .toast.out{ animation:toastout .25s var(--ease) forwards; }
 .toast .t-ico{ font-size:15px; flex:none; }
+.toast .t-ico .glyph{ width:15px; height:15px; display:block; }
 .toast.ok{ border-left:3px solid var(--green); }
 .toast.warn{ border-left:3px solid var(--amber); }
 .toast.err{ border-left:3px solid var(--red); }

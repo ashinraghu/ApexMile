@@ -1,7 +1,9 @@
 // Search, geocoding and routing.
 //  • Instant local index first (no network, no rate limit)
 //  • Nominatim only after typing stops, one request at a time (usage policy)
-//  • OSRM for geometry + turn-by-turn steps
+//  • TomTom for traffic-aware geometry + ETAs when the rider's key has
+//    routing access; Valhalla/OSRM free-flow with clear "standard estimate"
+//    labelling when it does not
 import { PLACES } from './places.js';
 import { distanceM, geo } from './geo.js';
 import { maneuverKey } from './navicons.js';
@@ -167,6 +169,153 @@ export async function reversePlace(lat, lng) {
 
 /* ------------------------------------------------------------------ routing */
 
+/** The routing key situation, shared by the whole app. */
+const tomtom = { key: '', status: 'idle' }; // idle | ok | rejected | quota
+
+/**
+ * Point routing at the rider's TomTom key (the same key that powers the
+ * traffic overlay). A *different* key always gets a fresh chance; the same
+ * key keeps its verdict so a rejected key is never re-tried in a loop.
+ */
+export function setTomTomRoutingKey(key) {
+  const k = String(key || '').trim();
+  if (k === tomtom.key) return;
+  tomtom.key = k;
+  tomtom.status = 'idle';
+}
+
+/** For labels and tests: is traffic-aware routing available right now? */
+export function tomtomRoutingState() {
+  return {
+    keyed: Boolean(tomtom.key),
+    status: tomtom.status,
+    usable: tomtom.status === 'ok' || (tomtom.key && tomtom.status === 'idle'),
+  };
+}
+
+const TOMTOM_ROUTE = 'https://api.tomtom.com/routing/1/calculateRoute';
+const TOMTOM_TRAVEL_MODE = { bike: 'motorcycle', car: 'car', walk: 'pedestrian' };
+
+// TomTom manoeuvre codes → the shared vector glyph keys (see navicons.js).
+const TT_MANEUVER = {
+  ARRIVE: 'arrive', ARRIVE_LEFT: 'arrive', ARRIVE_RIGHT: 'arrive', ARRIVE_AHEAD: 'arrive',
+  WAYPOINT_REACHED: 'arrive', WAYPOINT_LEFT: 'arrive', WAYPOINT_RIGHT: 'arrive',
+  DEPART: 'straight', STRAIGHT: 'straight', FOLLOW: 'straight', TOLLGATE: 'straight',
+  CROSS_BORDER: 'straight', SWITCH_PARALLEL_ROAD: 'straight', SWITCH_MAIN_ROAD: 'straight',
+  KEEP_LEFT: 'slight-left', BEAR_LEFT: 'slight-left', SLIGHT_LEFT: 'slight-left',
+  ROUNDABOUT_SLIGHT_LEFT: 'slight-left',
+  KEEP_RIGHT: 'slight-right', BEAR_RIGHT: 'slight-right', SLIGHT_RIGHT: 'slight-right',
+  ROUNDABOUT_SLIGHT_RIGHT: 'slight-right',
+  TURN_LEFT: 'left', ROUNDABOUT_LEFT: 'left',
+  TURN_RIGHT: 'right', ROUNDABOUT_RIGHT: 'right',
+  SHARP_LEFT: 'sharp-left', ROUNDABOUT_SHARP_LEFT: 'sharp-left',
+  SHARP_RIGHT: 'sharp-right', ROUNDABOUT_SHARP_RIGHT: 'sharp-right',
+  MAKE_UTURN: 'uturn', TRY_MAKE_UTURN: 'uturn', ROUNDABOUT_BACK: 'uturn',
+  ROUNDABOUT_CROSS: 'roundabout', ROUNDABOUT_STRAIGHT: 'roundabout', EXIT_ROUNDABOUT: 'roundabout',
+  ENTER_MOTORWAY: 'merge', ENTER_FREEWAY: 'merge', ENTER_HIGHWAY: 'merge',
+  TAKE_EXIT: 'merge', MOTORWAY_EXIT_LEFT: 'merge', MOTORWAY_EXIT_RIGHT: 'merge',
+  ENTRANCE_RAMP: 'merge', MERGE_LEFT_LANE: 'merge', MERGE_RIGHT_LANE: 'merge',
+  SWITCH_MOTORWAY_LEFT: 'merge', SWITCH_MOTORWAY_RIGHT: 'merge',
+  ENTER_CARPOOL_LANE_LEFT: 'merge', ENTER_CARPOOL_LANE_RIGHT: 'merge',
+  EXIT_CARPOOL_LANE_LEFT: 'merge', EXIT_CARPOOL_LANE_RIGHT: 'merge',
+  TAKE_FERRY: 'ferry', TAKE_SHIP_FERRY: 'ferry', LEAVE_SHIP_FERRY: 'ferry',
+  TAKE_CAR_TRAIN: 'ferry', LEAVE_CAR_TRAIN: 'ferry',
+};
+
+/**
+ * Traffic-aware routing from TomTom. `travelTimeInSeconds` already includes
+ * live traffic when `traffic=true`, and `computeTravelTimeFor=all` adds the
+ * no-traffic baseline so the sheet can say what traffic is costing.
+ */
+async function tomtomRoute(points, mode, key) {
+  const coordStr = points
+    .map((p) => `${Number(p.lat).toFixed(6)},${Number(p.lng).toFixed(6)}`)
+    .join(':');
+  const url = `${TOMTOM_ROUTE}/${coordStr}/json?key=${encodeURIComponent(key)}`
+    + `&travelMode=${TOMTOM_TRAVEL_MODE[mode] || 'car'}&traffic=true`
+    + '&computeTravelTimeFor=all&routeType=fastest&instructionsType=text&language=en-IN'
+    + (points.length <= 2 ? '&maxAlternatives=2' : '');
+
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 14000);
+  let res;
+  try {
+    res = await fetch(url, { signal: ctl.signal, headers: { Accept: 'application/json' } });
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!res.ok) {
+    const err = new Error(`TomTom routing returned ${res.status}`);
+    err.httpStatus = res.status;
+    throw err;
+  }
+  const data = await res.json();
+  const routes = (data?.routes || []).map((raw, index) => normalizeTomTomRoute(raw, index, mode));
+  if (!routes.length) throw new Error('No route found for those points');
+  return routes;
+}
+
+function normalizeTomTomRoute(raw, index, mode) {
+  const coords = [];
+  for (const leg of raw.legs || []) {
+    for (const p of leg.points || []) {
+      const pair = [Number(p.longitude), Number(p.latitude)];
+      const last = coords[coords.length - 1];
+      if (!last || Math.abs(last[0] - pair[0]) > 1e-7 || Math.abs(last[1] - pair[1]) > 1e-7) {
+        coords.push(pair);
+      }
+    }
+  }
+  if (coords.length < 2) throw new Error('Empty route geometry');
+
+  // Guidance offsets are cumulative: turn them into per-step lengths.
+  const steps = [];
+  let begin = 0;
+  let beginTime = 0;
+  for (const ins of raw.guidance?.instructions || []) {
+    const offset = Math.max(begin, Number(ins.routeOffsetInMeters) || 0);
+    const at = Math.max(beginTime, Number(ins.travelTimeInSeconds) || 0);
+    steps.push({
+      instruction: String(ins.message || 'Continue').replace(/<[^>]+>/g, ''),
+      icon: TT_MANEUVER[String(ins.maneuver || '').toUpperCase()] || 'straight',
+      name: ins.street || (ins.roadNumbers || [])[0] || '',
+      distance: offset - begin,
+      duration: at - beginTime,
+      beginDist: begin,
+      endDist: offset,
+      maneuver: { type: ins.instructionType === 'LOCATION_ARRIVAL' ? 'arrive' : 'turn', modifier: '' },
+    });
+    begin = offset;
+    beginTime = at;
+  }
+
+  const summary = raw.summary || {};
+  const distance = Number(summary.lengthInMeters) || 0;
+  const duration = Number(summary.travelTimeInSeconds) || 0;
+  const km = distance / 1000;
+  const kmLabel = km >= 100 ? km.toFixed(0) : km.toFixed(1);
+  const mins = Math.round(duration / 60);
+
+  return {
+    id: index,
+    distance,
+    duration,
+    coords,
+    steps,
+    mode,
+    etaSource: 'tomtom',
+    trafficDelay: Number(summary.trafficDelayInSeconds) || 0,
+    noTrafficDuration: Number(summary.noTrafficTravelTimeInSeconds) || null,
+    summary: `${kmLabel} km · ${mins} min · traffic-aware`,
+  };
+}
+
+/** How an ETA was produced, in the rider's words. */
+export function etaBasisLabel(route) {
+  if (route?.etaSource === 'tomtom') return 'Traffic-aware ETA · TomTom';
+  return 'Standard estimate · no live traffic';
+}
+
 async function fetchJson(url, ms = 14000) {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), ms);
@@ -189,6 +338,28 @@ export async function directions({ from, to, via = [], mode = 'bike' }) {
   const points = [from, ...via.filter((p) => p && Number.isFinite(p.lat)), to];
   const coordStr = points.map((p) => `${Number(p.lng).toFixed(6)},${Number(p.lat).toFixed(6)}`).join(';');
   const allowAlternatives = points.length <= 2;
+
+  // Traffic-aware first, whenever the rider's TomTom key has routing access.
+  if (tomtom.key && tomtom.status !== 'rejected' && tomtom.status !== 'quota') {
+    try {
+      const routes = await tomtomRoute(points, mode, tomtom.key);
+      tomtom.status = 'ok';
+      return { routes, mode };
+    } catch (err) {
+      if (err?.httpStatus === 401 || err?.httpStatus === 403) {
+        // The key is refused (usually a Traffic-only key without the Routing
+        // products). Record the verdict and stop: every later plan or reroute
+        // skips TomTom entirely, so a rejected key is never retried in a loop.
+        tomtom.status = 'rejected';
+        console.warn('[routing] TomTom routing rejected — standard estimates from here on');
+      } else if (err?.httpStatus === 429) {
+        tomtom.status = 'quota';
+        console.warn('[routing] TomTom routing quota used — standard estimates until it resets');
+      } else {
+        console.warn('[routing] TomTom routing unavailable, using standard estimates', err?.message);
+      }
+    }
+  }
 
   // Bicycle and pedestrian get a real network from Valhalla. Car keeps OSRM
   // because it returns alternatives, which Valhalla's demo does not.

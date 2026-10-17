@@ -378,7 +378,7 @@ function handlePacket(pkt) {
       mine: false,
     });
     haptic([14, 26, 14]);
-    toast(`${pkt.name || 'Rider'}: ${pkt.text}`, { icon: '💬', ms: 4200 });
+    toast(`${pkt.name || 'Rider'}: ${pkt.text}`, { icon: 'chat', ms: 4200 });
     notify(`${pkt.name || 'Rider'}`, pkt.text || 'New pack message');
     return;
   }
@@ -396,7 +396,7 @@ function handlePacket(pkt) {
     const isNew = !ride.peers.has(pkt.id);
     upsertPeer(pkt);
     if (isNew) {
-      toast(`${pkt.name || 'A rider'} joined the ride`, { icon: '🎉' });
+      toast(`${pkt.name || 'A rider'} joined the ride`, { icon: 'check' });
       // Help them see us immediately instead of waiting for the next heartbeat.
       publishPosition(geo.pos, true);
     }
@@ -409,7 +409,7 @@ function handlePacket(pkt) {
     upsertPeer(pkt);
     if (pkt.sos && andNotified(pkt)) {
       haptic([60, 40, 60, 40, 60]);
-      toast(`SOS · ${pkt.name || 'A rider'} needs help`, { type: 'err', icon: '🚨', ms: 6000 });
+      toast(`SOS · ${pkt.name || 'A rider'} needs help`, { type: 'err', icon: 'sos', ms: 6000 });
       notify(`SOS from ${pkt.name || 'a rider'}`, 'They have marked a breakdown. Open ApexMile.');
     }
     if (isNew) bus.emit('ride:peer-joined', { peer: pkt });
@@ -477,7 +477,7 @@ function handleCaptainState(pkt) {
   // A retained message can outlive the ride on a public broker. Ignore stale ones.
   if (pkt.updatedAt && Date.now() - Number(pkt.updatedAt) > 6 * 60 * 60 * 1000) return;
   if (pkt.ended) {
-    toast(`The captain ended “${pkt.trip || ride.trip}”`, { icon: '🏁' });
+    toast(`The captain ended “${pkt.trip || ride.trip}”`, { icon: 'flag' });
     leaveRide({ broadcast: false });
     return;
   }
@@ -619,7 +619,7 @@ export function leaveRide({ broadcast = true, silent = false } = {}) {
 
   bus.emit('ride:peers', { peers: [] });
   bus.emit('ride:changed', { active: false });
-  if (!silent) toast('You left the ride · location sharing stopped', { icon: '🔒' });
+  if (!silent) toast('You left the ride · location sharing stopped', { icon: 'lock' });
 }
 
 export function endRideForAll() {
@@ -639,7 +639,7 @@ export function endRideForAll() {
   }
   publish({ t: 'bye' });
   setTimeout(() => leaveRide({ broadcast: false }), 450);
-  toast('Ride ended for everyone', { icon: '🏁' });
+  toast('Ride ended for everyone', { icon: 'flag' });
 }
 
 /* ------------------------------------------------------------------ api */
@@ -701,7 +701,7 @@ export function pingPeer(id) {
     return;
   }
   publish({ t: 'ping', to: id });
-  toast('Ping sent · they will see your request', { icon: '📍' });
+  toast('Ping sent · they will see your request', { icon: 'pin' });
 }
 
 export function peerList() {

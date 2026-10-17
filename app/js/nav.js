@@ -263,13 +263,13 @@ export function stopNavigation({ silent = false, reason = '' } = {}) {
     speak('Navigation ended');
     if (km > 0.2) {
       toast(`Ride ended · ${km.toFixed(1)} km · ${Math.round(elapsed / 60)} min`, {
-        icon: '🏁',
+        icon: 'flag',
         ms: 5000,
       });
     } else if (reason) {
       toast(reason);
     } else {
-      toast('Navigation ended', { icon: '🏁' });
+      toast('Navigation ended', { icon: 'flag' });
     }
   }
 
@@ -494,7 +494,7 @@ function checkArrival(remaining, pos) {
     const label = nav._label;
     speak('You have arrived');
     stopNavigation({ silent: true });
-    toast('You have arrived', { icon: '🏁', ms: 4200 });
+    toast('You have arrived', { icon: 'flag', ms: 4200 });
     bus.emit('nav:arrived', { label });
     return true;
   }
@@ -520,7 +520,7 @@ async function checkOffRoute(near, pos) {
 
 export async function reroute({ silent = false } = {}) {
   if (!nav.active || !nav._to) return;
-  if (!silent) toast('Off route — finding a new way', { type: 'warn', icon: '↻' });
+  if (!silent) toast('Off route — finding a new way', { type: 'warn', icon: 'reroute' });
   try {
     const { routes } = await directions({
       from: geo.pos,

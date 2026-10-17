@@ -280,3 +280,37 @@ Two follow-ups from the field after v11.2.1.
 - Node smoke model suite: band showcases + 96-combination ordering sweep — **all pass**; `node --check` on every touched module — clean.
 
 Still not verifiable from a sandbox: the actual WebSocket handshake through a real browser on real networks (the CSP change is the kind you verify on a phone, so test it there first), multi-device rooms, and a real TomTom key.
+
+---
+
+## Part 9 — v11.3.0: one search bar that opens, traffic-aware ETAs, drawn icons everywhere
+
+### 1. Radar search starts as one bar
+
+- The radar opens with a **single search bar** over the map. Tapping it expands the panel to the origin and destination fields (with swap), the mode row, the suggestion list and the Start action; the current-location map stays visible around it. A finished plan folds the panel back to one bar showing the destination, and a cleared result collapses it again.
+- Suggestions stay compact and stacked under the fields. The **Start** action is now a small pill parked at the bottom of the expanded panel instead of a full-width slab across it.
+- Voice listening is a drawn mic that turns into a red dot (`rec` class) instead of swapping the button's content for emoji.
+
+### 2. No emoji in the interface
+
+- Every pictographic emoji is gone from the app: home tiles, vehicle thumbnails, mode buttons and chips, suggestion rows, the searchbox (swap, mic, locate), the chat button, toasts, ride-status chips, the destination marker and the SOS/status buttons all render from the same 24×24 drawn-glyph set (`uiIcon` in `js/navicons.js`) that the navigation surface already used.
+- The result survives a scan of `app/index.html`, `app/css/app.css` and every non-vendor JS module: **zero emoji code points**, including the VS16 sequences that forced colourful rendering. Typographic characters (dashes, quotes, arrows in prose, ✕/✓/＋/－ button notation) are unchanged.
+
+### 3. Traffic-aware routes and ETAs from TomTom
+
+- When the rider's TomTom key carries the **Routing** products, `directions()` plans through TomTom's Calculate Route API with `traffic=true` and `computeTravelTimeFor=all`, `travelMode` mapped from the app's modes (motorcycle/car/pedestrian). The ETA is TomTom's traffic-aware `travelTimeInSeconds`; the sheet says **Traffic-aware ETA · TomTom** and names the traffic delay ("traffic adds about N min on this route"); the step list comes from TomTom guidance (manoeuvre codes mapped onto the drawn glyph set).
+- When routing access is **not** available — no key, a Traffic-only key, or anything else — the plan falls back to the existing Valhalla/OSRM engines and says so plainly: **Standard estimate — planned without live traffic**, in the route sheet and the steps sheet.
+- **A rejected key is never retried in a loop.** A 401/403 from the Routing API records the verdict on that key: every later plan and every off-route reroute (which re-plans every ~20 s while guidance is on) skips TomTom entirely until the rider saves a *different* key. A 429 (quota) pauses TomTom the same way. Transient network failures stay retryable.
+- The traffic setup sheet now explains that the one key powers both the flow overlay and traffic-aware routing, and asks for the Traffic **and** Routing products.
+
+### 4. Google Maps handoff, MapLibre stays
+
+- The route preview carries an **Open in Google Maps** action (Maps URLs deep link with origin, destination and travel mode) and the layer strip has a **Google traffic** pill that opens Google Maps centred on the current view with its traffic layer. The in-app MapLibre map, the TomTom flow overlay and everything else stay exactly where they were — this is a handoff, not a replacement.
+
+### Verification
+
+- Mocked TomTom suite (Node, stubbed fetch): 36 checks — traffic-aware success (mode mapping, `traffic=true`, alternatives, guidance steps with cumulative offsets, delay surfaced, labels), 403 → clear fallback to standard estimates with **zero** TomTom requests on the follow-up plan (the no-periodic-retries rule), new key gets a fresh chance, 429 pauses retries, no key never touches TomTom, transient outage stays retryable — **all pass**.
+- jsdom smoke suite (27 checks): collapsed single bar → tap expands → stacked suggestions with drawn icons → plan folds the panel back with the destination and **Start ride**; standard-estimate labelling without a key; traffic-aware labelling with a good key (delay surfaced); 403 falling back with the label intact and no TomTom retries across a mode-switch re-plan; both Google Maps handoffs opening the right URLs; zero emoji in the fully rendered page — **all pass**.
+- `node --check` on every module (module-syntax aware), esbuild bundle resolves the whole import graph, `git diff --check` clean, HTML parses with 193 unique ids and every JS-referenced id present, emoji scan of HTML/CSS/non-vendor JS clean.
+
+Still not verified here: a real TomTom key with the Routing products enabled, a physical iPhone/Android, and the Google Maps handoff on a real device. No browser executable exists in this environment, so this is not a visual browser review.

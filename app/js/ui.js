@@ -1,5 +1,6 @@
 // DOM helpers, toasts, the bottom-sheet engine, theme, and small platform bits.
 // Everything here is framework-free and iOS/Android safe.
+import { uiIcon } from './navicons.js';
 
 export const $ = (sel, root = document) => root.querySelector(sel);
 export const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -24,8 +25,10 @@ export function toast(message, { type = 'ok', icon = '', ms = 3400 } = {}) {
   if (!host) return;
   const node = document.createElement('div');
   node.className = `toast ${type}`;
-  const glyph = icon || (type === 'ok' ? '✓' : type === 'warn' ? '⚠' : type === 'err' ? '✕' : '•');
-  node.innerHTML = `<span class="t-ico" aria-hidden="true">${esc(glyph)}</span><span>${esc(message)}</span>`;
+  // Toast icons are drawn, never emoji: `icon` is a UI icon name from
+  // navicons.js, and anything unknown falls back to the type's own glyph.
+  const name = icon || (type === 'ok' ? 'check' : type === 'warn' ? 'warn' : type === 'err' ? 'close' : 'info');
+  node.innerHTML = `<span class="t-ico" aria-hidden="true">${uiIcon(name)}</span><span>${esc(message)}</span>`;
   host.append(node);
   while (host.children.length > MAX_TOASTS) host.firstElementChild.remove();
   setTimeout(() => {
