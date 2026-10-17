@@ -10,14 +10,16 @@ import { state } from './store.js';
 import { geo, distanceM } from './geo.js';
 import { toast, haptic } from './ui.js';
 
-// Public MQTT-over-WebSocket brokers, tried in order. The previous build used
-// a single broker: when that one endpoint was blocked (common on some Indian
-// mobile networks) the badge flipped straight to Offline and riders never saw
-// each other. One reachable broker is enough for a room to work.
+// Public MQTT-over-WebSocket brokers. Public brokers are islands: a rider on
+// EMQX can never see a rider on HiveMQ, same room code or not. So the room
+// code itself picks which broker the room meets on (see brokerCandidates) —
+// everyone who types/scans the same code walks into the same room on the same
+// broker, and the rest are only fallbacks for when that one is unreachable.
+// (mqtt.eclipseprojects.io was removed: the Eclipse foundation shut it down.)
 const BROKERS = [
   { url: 'wss://broker.emqx.io:8084/mqtt', label: 'EMQX' },
   { url: 'wss://broker.hivemq.com:8884/mqtt', label: 'HiveMQ' },
-  { url: 'wss://mqtt.eclipseprojects.io:443/mqtt', label: 'Eclipse' },
+  { url: 'wss://mqtt-dashboard.com:8884/mqtt', label: 'HiveMQ (alt host)' },
   { url: 'wss://test.mosquitto.org:8081/mqtt', label: 'Mosquitto' },
 ];
 const PREFIX = 'apexmile/v10/ride/';
@@ -130,22 +132,31 @@ function connect(code) {
   tryNextBroker(code);
 }
 
-function brokerCandidates() {
+function brokerHash(code) {
+  let h = 0;
+  for (let i = 0; i < code.length; i += 1) h = (h * 33 + code.charCodeAt(i)) >>> 0;
+  return h;
+}
+
+function brokerCandidates(code) {
   const custom = String(state.broker || '').trim();
-  const list = custom
-    ? [{ url: custom, label: 'Custom' }]
-    : BROKERS.map((b) => ({ ...b }));
-  try {
-    const saved = localStorage.getItem('apexmile.broker.url');
-    const idx = list.findIndex((b) => b.url === saved);
-    if (idx > 0) list.unshift(list.splice(idx, 1)[0]);
-  } catch { /* private mode */ }
+  if (custom) return [{ url: custom, label: 'Custom' }];
+  const list = BROKERS.map((b) => ({ ...b }));
+  if (code) {
+    // Co-location rule: the room code deterministically names the meeting
+    // broker, so every rider in this room tries the same endpoint first. A
+    // per-device "sticky broker" (the old behaviour) scattered room members
+    // across different brokers, which is exactly the "we joined but can't see
+    // each other" bug — public brokers do not share messages.
+    const primary = brokerHash(code) % list.length;
+    list.unshift(list.splice(primary, 1)[0]);
+  }
   return list;
 }
 
 function tryNextBroker(code) {
   if (!ride.active || ride.code !== code) return;
-  const list = brokerCandidates();
+  const list = brokerCandidates(code);
 
   if (ride._attempt >= list.length) {
     ride.connected = false;
@@ -211,14 +222,26 @@ function tryNextBroker(code) {
     clearTimeout(timer);
     ride.connected = true;
     ride._attempt = 0;
-    try { localStorage.setItem('apexmile.broker.url', broker.url); } catch { /* private */ }
     setStatus('live');
+
+    // Announce presence only after the subscription is registered. Firing the
+    // hello straight at the broker raced the SUBACK: the room answered before
+    // we could listen, and the fresh joiner sat there seeing nobody for a full
+    // heartbeat (or forever, when the others were standing still).
+    let announced = false;
+    const announce = () => {
+      if (announced || !ride.active || ride.code !== code) return;
+      announced = true;
+      publish({ t: 'hello', lat: geo.pos?.lat, lng: geo.pos?.lng });
+      publishPosition(geo.pos, true);
+      if (ride.isCaptain) publishCaptainState();
+    };
     client.subscribe([evTopic, stateTopic], { qos: 0 }, (err) => {
       if (err) console.warn('[ride] subscribe', err);
+      announce();
     });
-    publish({ t: 'hello', lat: geo.pos?.lat, lng: geo.pos?.lng });
-    publishPosition(geo.pos, true);
-    if (ride.isCaptain) publishCaptainState();
+    // A broker that never answers SUBACK must not silence us either.
+    setTimeout(announce, 1500);
     bus.emit('ride:transport', connectionInfo());
   });
 
@@ -537,7 +560,9 @@ function startLoops() {
   clearInterval(ride._sweep);
   ride._tick = setInterval(() => {
     if (!ride.active) return;
-    if (document.visibilityState === 'hidden') return;
+    // No skip for a hidden screen: riders lock their phones mid-ride. GPS may
+    // freeze, but the heartbeat must not — otherwise every phone-in-pocket
+    // rider goes stale in 38 s and is dropped from the pack in two minutes.
     const pos = geo.pos;
     if (!pos) return;
     const moved = ride._lastPos ? distanceM(ride._lastPos, pos) : Infinity;

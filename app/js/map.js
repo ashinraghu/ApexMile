@@ -149,15 +149,18 @@ export function initMap({ center, preset } = {}) {
   map.once('load', () => clearTimeout(styleGuard));
 
   map.on('error', (e) => {
-    // A rejected TomTom key is a 401/403 on the flow tiles. Silence would leave
-    // the pill lit over a map with no traffic, so surface it once and turn the
-    // overlay off; the key stays in settings for editing.
+    // A rejected TomTom key is a 401/403 on the flow tiles; an exhausted free
+    // quota is a 429. Silence would leave the pill lit over a map with no
+    // traffic, so surface it once per key — the saved key is never deleted,
+    // and the app may retry the overlay on the next launch.
     const status = Number(e?.error?.status) || 0;
     const url = String(e?.error?.url || '');
     if (mapCtl.traffic && (e?.sourceId === TRAFFIC_SOURCE || /api\.tomtom\.com/.test(url))
-      && (status === 401 || status === 403)) {
+      && [401, 403, 429].includes(status)) {
       if (!mapCtl._trafficWarned) {
         mapCtl._trafficWarned = true;
+        mapCtl.traffic = false;
+        removeTraffic();
         bus.emit('traffic:error', { status });
       }
       return;
@@ -337,6 +340,16 @@ function trafficTileUrl(key) {
   // the light basemaps and satellite.
   return `https://api.tomtom.com/traffic/map/4/tile/flow/relative0/{z}/{x}/{y}.png`
     + `?key=${k}&tileSize=256&thickness=6`;
+}
+
+/**
+ * A single real tile request used to prove a key before we promise traffic.
+ * A mid-zoom tile over Bengaluru: a valid key answers 200 with a PNG (empty
+ * or busy, coverage does not matter); a key that lacks the Traffic products
+ * answers 401/403. Same origin rules as the map's own tile fetches.
+ */
+export function trafficProbeUrl(key) {
+  return trafficTileUrl(key).replace('{z}/{x}/{y}', '10/732/474');
 }
 
 function ensureTraffic() {

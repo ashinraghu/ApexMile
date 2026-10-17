@@ -12,7 +12,10 @@ const OSRM = 'https://router.project-osrm.org';
 // pedestrian routing (OSRM's demo only runs the car profile). If it is down we
 // fall back to OSRM geometry with a realistic speed for the mode.
 const VALHALLA = 'https://valhalla1.openstreetmap.de';
-const VALHALLA_COSTING = { car: 'auto', bike: 'bicycle', walk: 'pedestrian' };
+// ApexMile's "bike" is a motorcycle, so cost it as one. Costing these routes as
+// a push-bike was the reason a bike ETA could read *slower* than a car in the
+// city: 15–20 km/h bicycle speeds against free-flow car speeds.
+const VALHALLA_COSTING = { car: 'auto', bike: 'motorcycle', walk: 'pedestrian' };
 
 /* ------------------------------------------------------------------ search */
 
@@ -219,16 +222,42 @@ export async function directions({ from, to, via = [], mode = 'bike' }) {
  * Car ETAs from OSRM assume free-flowing traffic. Apply a modest urban factor
  * instead of pretending it is live traffic. Bike and walk use a realistic
  * moving average when Valhalla could not answer.
+ *
+ * The bike numbers are motorcycle numbers, and deliberately sit a little above
+ * the congested-car model: in city traffic a bike filters past queues, so a
+ * bike ETA should never read worse than the same trip in a car. On the open
+ * highway both converge — nobody filters at 90 km/h.
  */
-function adjustedDuration(route, mode) {
+export function adjustedDuration(route, mode) {
   const km = route.distance / 1000;
   if (mode === 'walk') return (km / 4.8) * 3600;
   if (mode === 'bike') {
-    const kmh = km < 12 ? 25 : km < 45 ? 33 : 44;
-    return (km / kmh) * 3600;
+    // OSRM's duration is a free-flow *car* estimate over this exact geometry:
+    // the honest baseline for a like-for-like bike-vs-car comparison.
+    return modeledBikeSeconds(route.duration, km);
   }
   const factor = km < 12 ? 1.18 : km < 60 ? 1.1 : 1.05;
   return route.duration * factor;
+}
+
+/**
+ * Router ETAs (Valhalla motorcycle costing, like OSRM's car costing) assume
+ * free-flow. In the city a motorcycle keeps moving while cars queue, so trim
+ * urban routes for that filtering advantage; leave open-road times alone.
+ * A plausibility floor keeps the claim honest — never model the bike faster
+ * than a sane moving average for the distance band. The trims deliberately
+ * sit below the car congestion factors (1.18 / 1.10 / 1.05) over the same
+ * free-flow baseline, so a bike ETA never reads worse than the same trip by
+ * car — exactly what riders expect in Indian city traffic.
+ */
+export function modeledBikeSeconds(seconds, km) {
+  const trim = km < 12 ? 0.82 : km < 45 ? 0.95 : 1;
+  // The plausibility floor exists to rein in the filtering trim; with no trim
+  // (open road) the router's number is already fine and must pass untouched.
+  if (trim === 1) return Math.round(seconds);
+  const capKmh = km < 12 ? 40 : 55;
+  const floorSeconds = (km / capKmh) * 3600;
+  return Math.max(Math.round(seconds * trim), Math.round(floorSeconds));
 }
 
 /* ------------------------------------------------------------------ Valhalla */
@@ -341,7 +370,8 @@ async function valhallaRoute(points, mode) {
   if (coords.length < 2) throw new Error('Empty route geometry');
 
   const km = (Number(data.trip.summary?.length) || 0);
-  const seconds = Number(data.trip.summary?.time) || 0;
+  const freeFlowSeconds = Number(data.trip.summary?.time) || 0;
+  const seconds = mode === 'bike' ? modeledBikeSeconds(freeFlowSeconds, km) : freeFlowSeconds;
   const kmLabel = km >= 100 ? km.toFixed(0) : km.toFixed(1);
   const mins = Math.round(seconds / 60);
   const modeLabel = mode === 'walk' ? 'walking' : 'bike';
