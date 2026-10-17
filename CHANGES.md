@@ -376,3 +376,28 @@ The old card showed the ETA in the header, then again in every mode-eta chip, th
 - HTML parses with 194 unique ids; every JS-referenced id present.
 
 Still not verified here: a real phone browser, and a real TomTom key. No browser executable exists in this environment.
+
+---
+
+## Part 12 — v11.4.0: Google-Maps flow — no Directions button, compare Bike / Car / Walk, then Start
+
+Field request: the "Directions" button and the always-visible Bike/Car/Walk row in the search box are unnecessary. On Google Maps you type a few letters, tap the suggested place, and the place opens with its travel options.
+
+### 1. No Directions button, no mode row in the search box
+
+The `#directionsBtn` button and the search-box Bike/Car/Walk `.mode-row` are removed (HTML, CSS and JS). Typing shows suggestions as before; tapping a suggestion (or Enter / voice, which geocode the text) opens the place card directly — that tap *is* the directions request.
+
+### 2. Switchable mode comparison with real, differentiated ETAs
+
+On destination pick, `journey.planComparison()` plans **all three modes in parallel** (`Promise.allSettled` over Bike/Car/Walk `directions()` calls) and caches each mode's real routes in `journey.modeRoutes`. The route sheet shows three comparison cards (`.mode-compare` / `.mode-card`) with each mode's actual routed ETA + distance, tagging the fastest. This deliberately does **not** revive the v11.3.1 guessed ETAs: `modeMinutes()` now returns a value only from a route actually planned for that mode, otherwise `null` ("Checking…" while planning, "No route" when a mode fails).
+
+### 3. Choosing a mode reveals its correct ETA + Start
+
+Start is hidden until the rider explicitly taps a mode card for this destination (`modeChosen`, reset on every destination change). Tapping a card switches instantly from the cached per-mode routes (no re-plan), shows that mode's headline ETA/distance/arrival + cost, and reveals the green Start button. The pack-captain auto-start counts the captain's mode as chosen. Sheet `max-height` is `min(62vh, 460px)`; only the body scrolls, Start stays pinned.
+
+### Verification
+
+- `node --check` on every module; esbuild bundle resolves; `git diff --check` clean.
+- Static checks: no `directionsBtn` / `mode-btn` / `modeRow` references remain; every JS-referenced id exists in the HTML.
+
+Still not verified here: a real phone browser and live routing keys — no browser executable exists in this environment. Per-mode comparison costs up to three routing calls per destination pick (parallel, cached for instant switching).

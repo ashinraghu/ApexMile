@@ -537,40 +537,29 @@ b{ font-weight:800; }
 .switch[aria-checked="true"] i{ transform:translateX(20px); }
 .switch:focus-visible{ outline:3px solid var(--accent-soft); outline-offset:2px; }
 
-/* Travel-mode segment inside the radar search box */
-.mode-row{ display:flex; gap:6px; padding:0 10px 8px; }
-.mode-btn{
-  flex:1; min-height:36px; border-radius:10px; padding:0 6px;
-  display:flex; align-items:center; justify-content:center; gap:5px;
-  background:var(--bg-sunk); color:var(--text-2);
-  font-size:12px; font-weight:800; white-space:nowrap;
-}
-.mode-btn .glyph{ width:15px; height:15px; flex:none; }
-.mode-btn.active{
-  background:var(--accent-soft); color:var(--accent);
-  box-shadow:inset 0 0 0 1.5px var(--accent);
-}
-/* The Start action stays small and near the bottom of the expanded panel. */
-.sb-go{
-  margin:0 10px 10px auto; width:auto; min-height:34px;
-  padding:0 16px; border-radius:var(--r-pill); justify-content:center;
-  font-size:12.5px; letter-spacing:.01em;
-}
-.sb-go.ready{ background:var(--green); }
-
-/* Route sheet: compact inline mode selector (no guessed ETAs for other modes) */
-.rs-mode{ display:flex; gap:5px; margin-top:5px; }
-.rs-mode-chip{
-  display:inline-flex; align-items:center; gap:3px;
-  padding:3px 9px; border-radius:var(--r-pill);
+/* Route sheet: Bike / Car / Walk comparison (Google-Maps style).
+   Each card carries that mode's REAL routed ETA + distance; tapping one
+   selects the mode and reveals its ETA header + Start button. */
+.rs-compare-label{ font-size:10.5px; font-weight:800; color:var(--text-3); text-transform:uppercase; letter-spacing:.05em; }
+.mode-compare{ display:grid; grid-template-columns:repeat(3, 1fr); gap:6px; }
+.mode-card{
+  min-height:64px; padding:8px 6px 7px; border-radius:12px;
   background:var(--bg-sunk); border:1.5px solid transparent;
-  font-size:11px; font-weight:800; color:var(--text-2);
-  white-space:nowrap; line-height:1;
+  display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px;
+  color:var(--text-2); text-align:center;
 }
-.rs-mode-chip .glyph{ width:12px; height:12px; }
-.rs-mode-chip.active{ background:var(--blue-soft); border-color:var(--blue); color:var(--blue); }
-.mode-eta.active{ border-color:var(--blue); background:var(--blue-soft); color:var(--blue); }
-.mode-eta.active b{ color:var(--blue); }
+.mode-card .glyph{ width:17px; height:17px; }
+.mode-card .mc-label{ font-size:11px; font-weight:800; }
+.mode-card .mc-eta{ font-size:13px; font-weight:900; color:var(--text); line-height:1.1; }
+.mode-card .mc-dist{ font-size:9.5px; font-weight:700; color:var(--text-3); }
+.mode-card .mc-tag{
+  font-size:8.5px; font-weight:900; text-transform:uppercase; letter-spacing:.05em;
+  color:var(--green); line-height:1;
+}
+.mode-card.active{ background:var(--blue-soft); border-color:var(--blue); color:var(--blue); }
+.mode-card.active .mc-eta{ color:var(--blue); }
+.mode-card:disabled{ opacity:.55; }
+.mode-card:disabled .mc-eta{ color:var(--text-3); font-weight:800; }
 .rs-cost{
   margin-top:10px; padding-top:9px; border-top:1px solid var(--line);
   display:flex; flex-direction:column; gap:3px;
@@ -747,9 +736,7 @@ body.navigating .maplibregl-ctrl-bottom-right{ bottom:104px; }
 .searchbox:not(.expanded) .sb-dot.dest{ display:none; }
 .searchbox:not(.expanded) .sb-row-origin,
 .searchbox:not(.expanded) .sb-div,
-.searchbox:not(.expanded) .sb-swap,
-.searchbox:not(.expanded) .mode-row,
-.searchbox:not(.expanded) .sb-go{ display:none; }
+.searchbox:not(.expanded) .sb-swap{ display:none; }
 
 
 /* autocomplete */
@@ -831,7 +818,7 @@ body.navigating.has-sheet .map-fabs{ bottom:calc(96px + 180px); }
   border:1px solid var(--line);
   box-shadow:var(--shadow-3);
   display:flex; flex-direction:column; gap:8px;
-  max-height:min(58vh, 420px);
+  max-height:min(62vh, 460px);
   animation:sheetup .32s var(--ease-out);
 }
 @keyframes sheetup{ from{ transform:translateY(16px); opacity:0;} to{ transform:none; opacity:1;} }

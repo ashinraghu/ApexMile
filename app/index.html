@@ -351,13 +351,7 @@
               <button class="sb-clear" id="destClear" aria-label="Clear destination" hidden>✕</button>
               <button class="sb-mic" id="micBtn" aria-label="Search by voice"><svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0"/><path d="M12 18v3"/></svg></button>
             </div>
-            <div class="mode-row" id="modeRow" role="group" aria-label="Travel mode">
-              <button class="mode-btn active" type="button" data-mode="bike"><svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="5.4" cy="16.6" r="3.4"/><circle cx="18.6" cy="16.6" r="3.4"/><path d="M5.4 16.6 10 8.6h3.4l2.6 4.6"/><path d="M8.6 8.6h4.8"/><path d="m13.4 13.2 1.8 3.4"/></svg>Bike</button>
-              <button class="mode-btn" type="button" data-mode="car"><svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3.8 15.6v-2.8l2-4.6h12.4l2 4.6v2.8"/><path d="M3.8 15.6h16.4"/><path d="M6 12.8h12"/><circle cx="7.6" cy="15.8" r="1.9"/><circle cx="16.4" cy="15.8" r="1.9"/></svg>Car</button>
-              <button class="mode-btn" type="button" data-mode="walk"><svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="13.2" cy="4.6" r="2.1"/><path d="m10.2 21 2.2-6.4-2.2-2.6.8-4.2 3.4 2.2 2.8.8"/><path d="m12.4 14.6 2.8 6.4"/><path d="m10.2 12 -2.2 3.6L5.8 17"/></svg>Walk</button>
-            </div>
             <div class="ac" id="acList" hidden></div>
-            <button class="btn primary sm sb-go" id="directionsBtn" type="button">Directions</button>
           </div>
 
           <div class="layer-strip" id="layerStrip" role="group" aria-label="Map layers">
@@ -432,8 +426,7 @@
           <div class="rs-head">
             <div class="rs-title">
               <div class="rs-dest" id="rsDest">Destination</div>
-              <div class="rs-eta"><b id="rsEta">-- min</b><span id="rsDist">-- km</span></div>
-              <div class="rs-mode" id="rsMode"></div>
+              <div class="rs-eta"><b id="rsEta">Choose a mode</b><span id="rsDist"></span></div>
             </div>
             <div class="rs-actions">
               <button class="btn ghost icon" id="rsStepsBtn" aria-label="Turn-by-turn list">≡</button>
@@ -442,12 +435,14 @@
             </div>
           </div>
           <div class="rs-body">
-            <div class="rs-sub" id="rsSub">Fastest route</div>
+            <div class="rs-compare-label" id="rsCompareLabel">How are you travelling?</div>
+            <div class="mode-compare" id="rsMode" role="group" aria-label="Compare travel modes"></div>
+            <div class="rs-sub" id="rsSub">Tap Bike, Car or Walk to compare — then Start.</div>
             <div class="rs-cost" id="rsCost" hidden></div>
             <div class="alts" id="alts" hidden></div>
             <div class="rs-note" id="rsNote">Estimates use your own mileage where available.</div>
           </div>
-          <button class="btn primary rs-start" id="rsStartBtn" type="button" disabled>
+          <button class="btn primary rs-start" id="rsStartBtn" type="button" disabled hidden>
             <svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3 5 21l7-4 7 4Z"/></svg>
             <span>Start</span>
           </button>
