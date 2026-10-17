@@ -13,7 +13,7 @@ import * as mapCtl from './map.js';
 import {
   journey, plan, setDestination, setOrigin, setMode, clear as clearJourney,
   refresh as refreshJourney,
-  currentRoute, estimates, hasRoute, MODES, MODE_META, modeMinutes,
+  currentRoute, estimates, hasRoute, MODES, MODE_META,
 } from './journey.js';
 import {
   localSuggest, remoteSuggest, geocode, reverseDistrict, reversePlace, formatDistance,
@@ -905,8 +905,8 @@ function onJourneyUpdate({ cleared } = {}) {
     if (originInput) originInput.value = '';
     const cost = $('#rsCost');
     if (cost) cost.hidden = true;
-    const etas = $('#modeEtas');
-    if (etas) etas.hidden = true;
+    const modeHost = $('#rsMode');
+    if (modeHost) modeHost.innerHTML = '';
     collapseSearch();
     syncSheetHeight();
     refreshModeUi();
@@ -923,6 +923,7 @@ function onJourneyUpdate({ cleared } = {}) {
     $('#rsNote').textContent = 'Checking roads, turns and traffic.';
     const cost = $('#rsCost');
     if (cost) cost.hidden = true;
+    renderModeChips();
     refreshModeUi();
     syncSheetHeight();
     return;
@@ -980,7 +981,7 @@ function onJourneyUpdate({ cleared } = {}) {
     alts.hidden = true;
   }
 
-  renderModeEtas(route);
+  renderModeChips();
   renderRouteCost(route);
   refreshModeUi();
   syncCaptainDestination();
@@ -1038,18 +1039,16 @@ function onDirectionsPressed() {
   plan();
 }
 
-function renderModeEtas(route) {
-  const host = $('#modeEtas');
+function renderModeChips() {
+  const host = $('#rsMode');
   if (!host) return;
-  host.hidden = false;
   host.innerHTML = '';
   for (const mode of MODES) {
-    const mins = modeMinutes(mode, route);
     const b = document.createElement('button');
     b.type = 'button';
-    b.className = `mode-eta ${journey.mode === mode ? 'active' : ''}`;
+    b.className = `rs-mode-chip ${journey.mode === mode ? 'active' : ''}`;
     b.setAttribute('aria-pressed', journey.mode === mode ? 'true' : 'false');
-    b.innerHTML = `<span>${uiIcon(MODE_META[mode].icon)} ${MODE_META[mode].label}</span><b>${mins} min</b>`;
+    b.innerHTML = `${uiIcon(MODE_META[mode].icon)} ${MODE_META[mode].label}`;
     b.addEventListener('click', () => {
       if (journey.mode === mode) return;
       haptic(6);

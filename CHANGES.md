@@ -344,3 +344,35 @@ Field report on v11.3.0: after picking a destination from the suggestions, the D
 - SW bumped to `apexmile-v11.3.1`.
 
 Still not verified here: a real TomTom key on a real phone, and the Google-Maps feel of the card in a real browser — no browser executable exists in this environment.
+
+---
+
+## Part 11 — v11.3.2: compact route card — Start always visible, no more guessed ETAs
+
+Field report on v11.3.1: on a phone screen, the Start button was still being clipped below the fold because the mode-etas row (with guessed ETAs for every mode) took up too much vertical space inside the sheet's height cap. The mode-etas also showed wrong values — when you switched to car mode, the bike ETA was computed from the car route's distance using an arbitrary speed constant, so every mode switch changed all the numbers to misleading values.
+
+### 1. Start is always visible and tappable
+
+The sheet is restructured as a three-zone flex column:
+- **Top zone** (`.rs-head`, `flex:none`): destination name, big ETA + distance, compact inline mode chips, and the action icons (steps, Google Maps, close).
+- **Middle zone** (`.rs-body`, `flex:1; min-height:0; overflow-y:auto`): the ETA basis sentence, cost breakdown, route alternatives and the honest note. Scrolls internally when the content is taller than the available space.
+- **Bottom zone** (`#rsStartBtn`, `flex:none; margin-top:auto`): the green Start button. Always rendered, always visible, always tappable — it sits below the scrollable body, never inside it.
+
+The sheet no longer uses `overflow: hidden` (which was the root cause of the clip). The `max-height` is now `min(58vh, 420px)` with only the middle zone scrolling.
+
+### 2. No more guessed ETAs for other modes
+
+The full-width mode-etas row (with icon + label + guessed minutes for Bike, Car, Walk) is gone. In its place: compact inline mode chips inside the header (`#rsMode`), showing only the mode label with no ETA. The ETA shown in the card is always the real value from the routing engine for the current mode — not a `route.distance / arbitrary_kmh` back-calculation. Tapping a mode chip re-plans for that mode; the ETA updates from the new route.
+
+### 3. Shorter, less repeated information
+
+The old card showed the ETA in the header, then again in every mode-eta chip, then the arrival time in the subtitle, then the cost breakdown, alternatives, and a long note. Now: header has destination + ETA + distance + mode chips (compact). Body has one-line ETA basis, cost, alternatives (when they exist), and the honest note. Nothing is repeated.
+
+### Verification
+
+- `node --check` on every module — all pass.
+- esbuild bundle resolves the full import graph (266 KB).
+- `git diff --check` clean.
+- HTML parses with 194 unique ids; every JS-referenced id present.
+
+Still not verified here: a real phone browser, and a real TomTom key. No browser executable exists in this environment.
