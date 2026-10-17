@@ -49,6 +49,35 @@ The site root is **`app/`** — not the repository root.
 npx wrangler pages deploy app --project-name apexmile
 ```
 
+### Option C — Workers Builds (static assets)
+
+The Cloudflare dashboard now creates **Workers** projects, and `npx wrangler deploy`
+is the default deploy command there. A Pages-style “build output directory” does
+not apply to a Worker, so the repo contains a root `wrangler.jsonc`:
+
+```jsonc
+{
+  "name": "apexmile",
+  "compatibility_date": "2026-10-17",
+  "assets": { "directory": "./app" }
+}
+```
+
+This is an **assets-only Worker** (no server script, no build step). In the
+Worker's build settings keep:
+
+- **Build command:** none
+- **Deploy command:** `npx wrangler deploy`
+- **Root directory:** `/`
+
+`_headers`, `sw.js` and the manifest are served from `app/` exactly as they are
+on Pages. The URL is `https://<worker-name>.<account>.workers.dev`; attach a
+custom domain under **Settings → Domains & Routes**.
+
+> A first build from a branch that does not contain `app/` (for example `main`
+> before the app was merged) fails with *“Could not detect a directory containing
+> static files”*. Merge the app first, or point the build at the branch that has it.
+
 ### After deploying
 
 1. Open the HTTPS URL in **Safari (iPhone)** or **Chrome (Android)**.
