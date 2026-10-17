@@ -433,7 +433,7 @@
             <div class="rs-title">
               <div class="rs-dest" id="rsDest">Destination</div>
               <div class="rs-eta"><b id="rsEta">-- min</b><span id="rsDist">-- km</span></div>
-              <div class="rs-sub" id="rsSub">Fastest route</div>
+              <div class="rs-mode" id="rsMode"></div>
             </div>
             <div class="rs-actions">
               <button class="btn ghost icon" id="rsStepsBtn" aria-label="Turn-by-turn list">≡</button>
@@ -441,16 +441,16 @@
               <button class="btn ghost icon" id="rsClearBtn" aria-label="Close directions">✕</button>
             </div>
           </div>
-          <div class="mode-etas" id="modeEtas" hidden></div>
-          <button class="btn primary rs-start" id="rsStartBtn" type="button" disabled>
-            <svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3 5 21l7-4 7 4Z"/></svg>
-            <span>Start</span>
-          </button>
           <div class="rs-body">
+            <div class="rs-sub" id="rsSub">Fastest route</div>
             <div class="rs-cost" id="rsCost" hidden></div>
             <div class="alts" id="alts" hidden></div>
             <div class="rs-note" id="rsNote">Estimates use your own mileage where available.</div>
           </div>
+          <button class="btn primary rs-start" id="rsStartBtn" type="button" disabled>
+            <svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3 5 21l7-4 7 4Z"/></svg>
+            <span>Start</span>
+          </button>
         </div>
 
         <!-- Group sheet -->

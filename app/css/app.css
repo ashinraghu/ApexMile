@@ -558,16 +558,17 @@ b{ font-weight:800; }
 }
 .sb-go.ready{ background:var(--green); }
 
-/* Route sheet: comparable mode ETAs + cost breakdown */
-.mode-etas{ display:flex; gap:6px; }
-.mode-eta{
-  flex:1; min-height:44px; padding:6px 4px; border-radius:11px;
+/* Route sheet: compact inline mode selector (no guessed ETAs for other modes) */
+.rs-mode{ display:flex; gap:5px; margin-top:5px; }
+.rs-mode-chip{
+  display:inline-flex; align-items:center; gap:3px;
+  padding:3px 9px; border-radius:var(--r-pill);
   background:var(--bg-sunk); border:1.5px solid transparent;
-  display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1px;
-  font-size:10px; font-weight:800; color:var(--text-3); text-transform:uppercase; letter-spacing:.04em;
+  font-size:11px; font-weight:800; color:var(--text-2);
+  white-space:nowrap; line-height:1;
 }
-.mode-eta b{ font-size:13px; color:var(--text); text-transform:none; letter-spacing:0; }
-.mode-eta .glyph{ width:13px; height:13px; vertical-align:-2.5px; }
+.rs-mode-chip .glyph{ width:12px; height:12px; }
+.rs-mode-chip.active{ background:var(--blue-soft); border-color:var(--blue); color:var(--blue); }
 .mode-eta.active{ border-color:var(--blue); background:var(--blue-soft); color:var(--blue); }
 .mode-eta.active b{ color:var(--blue); }
 .rs-cost{
@@ -822,47 +823,47 @@ body.navigating.has-sheet .map-fabs{ bottom:calc(96px + 180px); }
 .route-sheet{
   position:absolute; z-index:6; left:0; right:0; bottom:0;
   margin:0 calc(var(--safe-r) + 10px) 10px calc(var(--safe-l) + 10px);
-  padding:14px 14px 12px;
+  padding:12px 14px 12px;
   border-radius:var(--r-xl);
   background:var(--glass-strong);
   backdrop-filter:blur(26px) saturate(190%);
   -webkit-backdrop-filter:blur(26px) saturate(190%);
   border:1px solid var(--line);
   box-shadow:var(--shadow-3);
-  display:flex; flex-direction:column; gap:11px;
-  max-height:min(54vh, 430px);
-  overflow:hidden;
+  display:flex; flex-direction:column; gap:8px;
+  max-height:min(58vh, 420px);
   animation:sheetup .32s var(--ease-out);
 }
 @keyframes sheetup{ from{ transform:translateY(16px); opacity:0;} to{ transform:none; opacity:1;} }
-.rs-head{ display:flex; justify-content:space-between; align-items:flex-start; gap:10px; flex:none; }
-.rs-title{ min-width:0; }
+.rs-head{ display:flex; justify-content:space-between; align-items:flex-start; gap:8px; flex:none; }
+.rs-title{ min-width:0; flex:1; }
 .rs-dest{
-  font-size:15px; font-weight:900; letter-spacing:-.01em;
+  font-size:14px; font-weight:900; letter-spacing:-.01em;
   white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-bottom:2px;
 }
-.rs-eta{ display:flex; align-items:baseline; gap:7px; }
-.rs-eta b{ font-size:24px; font-weight:900; color:var(--green); letter-spacing:-.03em; }
-.rs-eta span{ font-size:13px; font-weight:800; color:var(--text-2); }
-.rs-sub{ font-size:11.5px; font-weight:700; color:var(--text-2); margin-top:3px; }
+.rs-eta{ display:flex; align-items:baseline; gap:6px; }
+.rs-eta b{ font-size:22px; font-weight:900; color:var(--green); letter-spacing:-.03em; }
+.rs-eta span{ font-size:12px; font-weight:800; color:var(--text-2); }
+.rs-sub{ font-size:10.5px; font-weight:600; color:var(--text-3); line-height:1.4; }
 .rs-note{ font-size:10px; color:var(--text-3); line-height:1.45; }
-.rs-actions{ display:flex; gap:6px; align-items:center; flex:none; }
-/* The primary CTA, unmissable like Google's Start button. */
+.rs-actions{ display:flex; gap:4px; align-items:center; flex:none; }
+/* The primary CTA — always visible at the bottom, never clipped. */
 .rs-start{
-  flex:none; width:100%; min-height:46px; gap:8px;
+  flex:none; width:100%; min-height:44px; gap:8px;
   justify-content:center; border-radius:14px;
   background:var(--green); color:#fff;
   font-size:15px; font-weight:900; letter-spacing:.01em;
   box-shadow:0 8px 20px -10px rgba(14,159,110,.8);
+  margin-top:auto;
 }
 .rs-start .glyph{ width:18px; height:18px; display:block; }
 .rs-start:disabled{ opacity:.55; box-shadow:none; }
 .rs-body{
-  min-height:0; overflow-y:auto; -webkit-overflow-scrolling:touch;
-  display:flex; flex-direction:column; gap:9px;
+  flex:1; min-height:0; overflow-y:auto; -webkit-overflow-scrolling:touch;
+  display:flex; flex-direction:column; gap:7px;
 }
-.rs-body .rs-cost{ margin-top:0; padding-top:9px; border-top:1px solid var(--line); }
-.alts{ display:flex; gap:6px; overflow-x:auto; padding-top:9px; border-top:1px solid var(--line); scrollbar-width:none; }
+.rs-body .rs-cost{ margin-top:0; padding-top:7px; border-top:1px solid var(--line); }
+.alts{ display:flex; gap:6px; overflow-x:auto; padding-top:7px; border-top:1px solid var(--line); scrollbar-width:none; }
 .alts::-webkit-scrollbar{ display:none; }
 .alt{
   flex:none; padding:7px 12px; border-radius:var(--r-sm);
