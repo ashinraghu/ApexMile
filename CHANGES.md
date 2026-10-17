@@ -401,3 +401,33 @@ Start is hidden until the rider explicitly taps a mode card for this destination
 - Static checks: no `directionsBtn` / `mode-btn` / `modeRow` references remain; every JS-referenced id exists in the HTML.
 
 Still not verified here: a real phone browser and live routing keys — no browser executable exists in this environment. Per-mode comparison costs up to three routing calls per destination pick (parallel, cached for instant switching).
+
+---
+
+## Part 13 — v11.5.0: wider place search and lower-power long-ride tracking
+
+### Why some named places did not appear
+
+The bundled `PLACES` array is a small, India-first curated index (266 records at this change), not a worldwide directory. The only live search source before this change was the public Nominatim/OpenStreetMap index, which does not contain every private apartment or enclave. Search also returned only a few un-biased hits and had no second provider. A name such as “Loveshore Enclave” can therefore be absent because it is not mapped/indexed, even though it exists in Google Maps. This is a data-coverage limit, not an address formatting issue; free OpenStreetMap services cannot promise Google's proprietary Places coverage.
+
+### Search improvements
+
+- Photon now supplies interactive live suggestions from a separate OSM search index, with rounded nearby-position bias, longer result lists, relevance/proximity ranking, fuller locality context and duplicate suppression.
+- Workers Builds proxy Photon at `/api/places` and caches identical searches at the edge for five minutes; Pages deployments can fall back to Photon directly. Results remain subject to OSM coverage.
+- Forward Nominatim search is now reserved for explicit submissions (Enter, voice or “Try extended search”), not requests on each keystroke. Those requests are proximity-biased without excluding farther matches; forward and reverse Nominatim requests share a queue at least 1.1 seconds apart, respecting the public service's rate guidance.
+- An explicit extended-search row remains available even when quick suggestions are empty. Search results carry locality/category details and OpenStreetMap attribution. Privacy copy explains that the search text and a coarsened nearby position may be sent to the public providers.
+
+### Battery and heat improvements
+
+- A continuous GPS watch now runs only while Radar is open or a group ride is active; other tabs do not keep one running. Radar uses the browser's lower-power, cached mode outside navigation. High-accuracy tracking is requested only during guidance; all tracking stops while hidden and resumes only if Radar/a ride still needs it.
+- GPS fixes are retained internally, but map/UI listeners are notified only after meaningful movement or a bounded refresh interval. Last-position persistence is reduced to at most once per minute.
+- Navigation no longer updates the location marker twice per fix. Camera easing is rate-/distance-gated, route-progress GeoJSON redraws are throttled, the GPS accuracy polygon is smaller and updated less often, and that polygon is omitted during guidance. Group-ride markers are reconciled when Radar is open instead of mutating a hidden map.
+- The always-running locate-state poll was removed; group heartbeat/sweep timers were relaxed. When backgrounded, a low-rate presence-only heartbeat keeps the room alive without coordinates; peers mark the last position stale, and no stale coordinates are republished.
+- The idle location puck's perpetual pulse was replaced with a static halo.
+
+### Verification / limits
+
+- Syntax checks and bundle checks pass; mocked Photon/Nominatim tests cover exact names, proximity ranking, explicit Nominatim fallback, empty results and Worker validation/cache parameters.
+- Mocked GPS tests confirm low-power passive options, high-accuracy navigation options, single-watch reconfiguration and cleanup; room-loop tests confirm a coordinate-free 30-second background heartbeat and restoration of foreground position/sweep cadence. Static checks confirm the Photon CSP permission, Worker API, SW version bump and privacy text.
+
+A physical Android/iPhone was not available here, so real-world heat and battery savings still need a controlled ride test. Display brightness, sunlight, cellular reception, GPU and the navigation screen wake lock remain significant device-level power sources. Small private places still need to exist in the map provider's data; adding a paid Google Places/TomTom Search provider would require credentials, billing and a service-policy review.

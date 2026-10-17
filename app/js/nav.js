@@ -1,7 +1,7 @@
 // Turn-by-turn. Owns the active route, the banner, the bottom bar and the
 // camera-follow loop. Everything is driven by the single GPS watcher in geo.js.
 import { bus } from './bus.js';
-import { geo, distanceM, bearingDeg } from './geo.js';
+import { geo, distanceM, bearingDeg, setTrackingProfile } from './geo.js';
 import * as mapCtl from './map.js';
 import {
   buildRouteMeta, nearestOnRoute, directions, formatDistance,
@@ -185,6 +185,7 @@ export function startNavigation(route, { to, via = [], label = '' } = {}) {
   nav.meta = buildRouteMeta(route);
   nav.mode = route.mode || 'bike';
   nav.active = true;
+  setTrackingProfile('navigation');
   nav.startedAt = Date.now();
   nav.traveled = 0;
   nav.avgSpeed = 0;
@@ -247,6 +248,7 @@ export function stopNavigation({ silent = false, reason = '' } = {}) {
   const km = nav.traveled / 1000;
 
   nav.active = false;
+  setTrackingProfile('passive');
   document.body.classList.remove('navigating');
   document.documentElement.classList.remove('navigating');
   exitImmersive();

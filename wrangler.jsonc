@@ -1,6 +1,6 @@
 {
-  // Static app in app/ plus one tiny Worker route for the daily fuel-price
-  // feed. /api/* runs worker.js; every other request is served straight from
+  // Static app in app/ plus Worker routes for place search and daily fuel prices.
+  // /api/* runs worker.js; every other request is served straight from
   // the assets directory (including _headers and sw.js).
   "name": "apexmile",
   "main": "./worker.js",
