@@ -16,7 +16,8 @@ import {
 } from './rooms.js';
 import { journey, currentRoute, estimates } from './journey.js';
 import { nav } from './nav.js';
-import { maneuverSvg } from './navicons.js';
+import { maneuverSvg, uiIcon } from './navicons.js';
+import { etaBasisLabel } from './routing.js';
 import { priceSourceLabel, refreshFuelPrices } from './prices.js';
 
 const tpl = (id) => document.getElementById(id)?.innerHTML || '';
@@ -99,7 +100,7 @@ export function openVehicleSheet(vehicleId = null) {
         else addVehicle(payload);
 
         closeSheet();
-        toast(existing ? 'Vehicle updated' : `${name} added`, { icon: '🏍️' });
+        toast(existing ? 'Vehicle updated' : `${name} added`, { icon: 'bike' });
         bus.emit('vehicles:changed');
         return true;
       });
@@ -122,7 +123,7 @@ export function openOdometerSheet() {
         const next = Number(form.elements.odo.value);
         if (!Number.isFinite(next) || next < 0) return toast('Enter a valid reading', { type: 'warn' });
         if (next < veh.odo) {
-          toast('Odometer moved backwards — logs may look odd', { type: 'warn', icon: '⚠' });
+          toast('Odometer moved backwards — logs may look odd', { type: 'warn', icon: 'warn' });
         }
         updateVehicle(veh.id, { odo: next });
         closeSheet();
@@ -151,7 +152,7 @@ export function openPricesSheet() {
         const row = await refreshFuelPrices({ force: true });
         closeSheet();
         toast(row ? `Using the ${row.name} district rate` : 'Price feed unreachable — baseline restored', {
-          icon: row ? '⛽' : '📡',
+          icon: row ? 'fuel' : 'dish',
           type: row ? 'ok' : 'warn',
         });
         bus.emit('prices:changed');
@@ -262,7 +263,7 @@ export function openJoinSheet(prefill = '') {
         const joined = joinRide(code);
         if (!joined) return;
         closeSheet();
-        toast(`Joined room ${joined}`, { icon: '📡' });
+        toast(`Joined room ${joined}`, { icon: 'dish' });
         bus.emit('ride:joined', { code: joined });
         return true;
       });
@@ -288,7 +289,7 @@ export function openInviteSheet() {
       codeEl.title = 'Tap to copy the room code';
       codeEl.addEventListener('click', async () => {
         const ok = await copyText(ride.code);
-        toast(ok ? `Room code ${ride.code} copied` : `Room code: ${ride.code}`, { icon: '📋' });
+        toast(ok ? `Room code ${ride.code} copied` : `Room code: ${ride.code}`, { icon: 'copy' });
       });
       body.querySelector('#inviteUrl').textContent = url.replace(/^https?:\/\//, '');
 
@@ -325,7 +326,7 @@ export function openInviteSheet() {
         demo.textContent = 'Add a demo rider (simulated)';
         demo.addEventListener('click', () => {
           startDemoPeer();
-          toast('Demo rider added — not a real person', { icon: '👥' });
+          toast('Demo rider added — not a real person', { icon: 'check' });
           closeSheet();
         });
         endBtn.before(demo);
@@ -419,12 +420,12 @@ export function openRiderSheet(id) {
 }
 
 const STATUSES = [
-  { text: 'Riding normal', icon: '✅', sos: false },
-  { text: 'Fuel stop', icon: '⛽', sos: false },
-  { text: 'Quick break', icon: '☕', sos: false },
-  { text: 'Photo stop', icon: '📸', sos: false },
-  { text: 'Tyre / chain check', icon: '🔧', sos: false },
-  { text: 'Wildlife on road', icon: '🐘', sos: false },
+  { text: 'Riding normal', icon: 'check', sos: false },
+  { text: 'Fuel stop', icon: 'fuel', sos: false },
+  { text: 'Quick break', icon: 'cup', sos: false },
+  { text: 'Photo stop', icon: 'camera', sos: false },
+  { text: 'Tyre / chain check', icon: 'wrench', sos: false },
+  { text: 'Wildlife on road', icon: 'wildlife', sos: false },
 ];
 
 export function openStatusSheet() {
@@ -438,21 +439,21 @@ export function openStatusSheet() {
       const grid = body.querySelector('#statusGrid');
       const paint = () => {
         grid.innerHTML = '';
-        grid.append(buttonFor('🚨 Vehicle breakdown — send SOS', true, true));
-        for (const s of STATUSES) grid.append(buttonFor(`${s.icon} ${s.text}`, s.text, false));
+        grid.append(buttonFor('sos', 'Vehicle breakdown — send SOS', 'Vehicle breakdown — SOS', true));
+        for (const s of STATUSES) grid.append(buttonFor(s.icon, s.text, s.text, false));
       };
-      const buttonFor = (label, value, sos) => {
+      const buttonFor = (iconName, label, value, sos) => {
         const b = document.createElement('button');
         b.type = 'button';
         b.className = `status-b ${sos ? 'sos' : ''} ${!sos && current === value ? 'on' : ''}`;
-        b.textContent = label;
+        b.innerHTML = `${uiIcon(iconName)}<span>${esc(label)}</span>`;
         b.addEventListener('click', () => {
-          setMyStatus(sos ? '🚨 Vehicle breakdown' : value, { sos });
+          setMyStatus(value, { sos });
           haptic(sos ? [40, 60, 40] : 8);
           closeSheet();
           toast(sos ? 'SOS sent to your room' : `Status: ${value}`, {
             type: sos ? 'err' : 'ok',
-            icon: sos ? '🚨' : '✓',
+            icon: sos ? 'sos' : 'check',
           });
         });
         return b;
@@ -487,7 +488,7 @@ export function openStepsSheet() {
       if (est) {
         const note = document.createElement('p');
         note.className = 'hint';
-        note.textContent = `About ${Math.round(est.minutes)} min and ${est.litres.toFixed(2)} L of fuel (₹${Math.round(est.fuel)}) on ${est.vehicleName}.`;
+        note.textContent = `${etaBasisLabel(route)}. About ${Math.round(est.minutes)} min and ${est.litres.toFixed(2)} L of fuel (₹${Math.round(est.fuel)}) on ${est.vehicleName}.`;
         list.prepend(note);
       }
     },

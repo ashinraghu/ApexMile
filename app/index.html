@@ -160,7 +160,7 @@
       <div class="hero card">
         <div class="hero-top">
           <button class="veh-pill" id="heroVehBtn">
-            <span class="veh-thumb" id="heroThumb">🏍️</span>
+            <span class="veh-thumb" id="heroThumb"><svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="5.4" cy="16.6" r="3.4"/><circle cx="18.6" cy="16.6" r="3.4"/><path d="M5.4 16.6 10 8.6h3.4l2.6 4.6"/><path d="M8.6 8.6h4.8"/><path d="m13.4 13.2 1.8 3.4"/></svg></span>
             <span id="heroName">Add a vehicle</span>
             <span class="pencil">Edit</span>
           </button>
@@ -195,13 +195,13 @@
 
       <div class="tiles">
         <button class="tile t1" data-go="refuel">
-          <span class="tile-ico">⛽</span><span class="tile-t">Log fuel</span><span class="tile-s" id="tileFuelSub">₹600</span>
+          <span class="tile-ico"><svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="4" y="3.6" width="9.4" height="16.8" rx="1.6"/><path d="M4 9.6h9.4"/><path d="M13.4 7h2.8a1.6 1.6 0 0 1 1.6 1.6v8.2a1.6 1.6 0 0 0 1.6 1.6"/><path d="M16 20.4v-6.2"/></svg></span><span class="tile-t">Log fuel</span><span class="tile-s" id="tileFuelSub">₹600</span>
         </button>
         <button class="tile t2" data-go="radar">
-          <span class="tile-ico">📡</span><span class="tile-t">Ride radar</span><span class="tile-s" id="tileRadarSub">Live</span>
+          <span class="tile-ico"><svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="2"/><path d="M12 2a10 10 0 1 1 0 20 10 10 0 0 1 0-20"/><path d="M12 6a6 6 0 1 1 0 12"/></svg></span><span class="tile-t">Ride radar</span><span class="tile-s" id="tileRadarSub">Live</span>
         </button>
         <button class="tile t3" id="tileChain">
-          <span class="tile-ico">⛓️</span><span class="tile-t">Chain</span><span class="tile-s" id="tileChainSub">-- km</span>
+          <span class="tile-ico"><svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3.2" y="9" width="10.4" height="6" rx="3"/><rect x="10.4" y="9" width="10.4" height="6" rx="3"/></svg></span><span class="tile-t">Chain</span><span class="tile-s" id="tileChainSub">-- km</span>
         </button>
         <button class="tile t4" id="tileAddVeh">
           <span class="tile-ico">＋</span><span class="tile-t">Add vehicle</span><span class="tile-s">Garage</span>
@@ -338,25 +338,26 @@
           </div>
 
           <div class="searchbox" id="searchBox">
-            <div class="sb-row">
+            <div class="sb-row sb-row-origin">
               <span class="sb-dot start"></span>
               <input id="originInput" type="text" placeholder="Your location" enterkeyhint="search" />
-              <button class="sb-swap" id="swapBtn" aria-label="Swap start and destination">⇅</button>
+              <button class="sb-swap" id="swapBtn" aria-label="Swap start and destination"><svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M8 4.5v13"/><path d="m4.8 14.2 3.2 3.3 3.2-3.3"/><path d="M16 19.5v-13"/><path d="m12.8 9.8 3.2-3.3 3.2 3.3"/></svg></button>
             </div>
             <div class="sb-div"></div>
             <div class="sb-row">
+              <span class="sb-lead" aria-hidden="true"><svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" focusable="false"><circle cx="11" cy="11" r="7"/><path d="m20.5 20.5-4.5-4.5"/></svg></span>
               <span class="sb-dot dest"></span>
               <input id="destInput" type="text" placeholder="Where to?" enterkeyhint="go" autocomplete="off" />
               <button class="sb-clear" id="destClear" aria-label="Clear destination" hidden>✕</button>
-              <button class="sb-mic" id="micBtn" aria-label="Search by voice">🎙</button>
+              <button class="sb-mic" id="micBtn" aria-label="Search by voice"><svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0"/><path d="M12 18v3"/></svg></button>
             </div>
             <div class="mode-row" id="modeRow" role="group" aria-label="Travel mode">
-              <button class="mode-btn active" type="button" data-mode="bike">🏍 Bike</button>
-              <button class="mode-btn" type="button" data-mode="car">🚗 Car</button>
-              <button class="mode-btn" type="button" data-mode="walk">🚶 Walk</button>
+              <button class="mode-btn active" type="button" data-mode="bike"><svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="5.4" cy="16.6" r="3.4"/><circle cx="18.6" cy="16.6" r="3.4"/><path d="M5.4 16.6 10 8.6h3.4l2.6 4.6"/><path d="M8.6 8.6h4.8"/><path d="m13.4 13.2 1.8 3.4"/></svg>Bike</button>
+              <button class="mode-btn" type="button" data-mode="car"><svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3.8 15.6v-2.8l2-4.6h12.4l2 4.6v2.8"/><path d="M3.8 15.6h16.4"/><path d="M6 12.8h12"/><circle cx="7.6" cy="15.8" r="1.9"/><circle cx="16.4" cy="15.8" r="1.9"/></svg>Car</button>
+              <button class="mode-btn" type="button" data-mode="walk"><svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="13.2" cy="4.6" r="2.1"/><path d="m10.2 21 2.2-6.4-2.2-2.6.8-4.2 3.4 2.2 2.8.8"/><path d="m12.4 14.6 2.8 6.4"/><path d="m10.2 12 -2.2 3.6L5.8 17"/></svg>Walk</button>
             </div>
-            <button class="btn primary lg sb-go" id="directionsBtn" type="button">Directions</button>
             <div class="ac" id="acList" hidden></div>
+            <button class="btn primary sm sb-go" id="directionsBtn" type="button">Directions</button>
           </div>
 
           <div class="layer-strip" id="layerStrip" role="group" aria-label="Map layers">
@@ -376,12 +377,20 @@
               </svg>
               Satellite
             </button>
+            <button class="pill" type="button" id="gmapsPill" aria-label="Open the Google Maps traffic map">
+              <svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+                <path d="M14 4h6v6"></path>
+                <path d="m20 4-9 9"></path>
+                <path d="M18 13.5V19a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5.5"></path>
+              </svg>
+              Google traffic
+            </button>
           </div>
         </div>
 
         <!-- Floating right controls -->
         <div class="map-fabs" id="mapFabs">
-          <button class="fab" id="fabLocate" aria-label="Center on me">➤</button>
+          <button class="fab" id="fabLocate" aria-label="Center on me"><svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3 5 21l7-4 7 4Z"/></svg></button>
           <button class="fab" id="fabZoomIn" aria-label="Zoom in">＋</button>
           <button class="fab" id="fabZoomOut" aria-label="Zoom out">－</button>
           <button class="fab" id="fabPitch" aria-label="Toggle 3D view">3D</button>
@@ -435,6 +444,7 @@
               <div class="rs-note" id="rsNote">Estimates use your own mileage where available.</div>
             </div>
             <div class="rs-actions">
+              <button class="btn ghost icon" id="rsGmapsBtn" aria-label="Open in Google Maps"><svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M14 4h6v6"/><path d="m20 4-9 9"/><path d="M18 13.5V19a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5.5"/></svg></button>
               <button class="btn ghost icon" id="rsStepsBtn" aria-label="Turn-by-turn list">≡</button>
               <button class="btn ghost icon" id="rsClearBtn" aria-label="Close directions">✕</button>
             </div>
@@ -448,7 +458,7 @@
         <div class="group-bar" id="groupBar" hidden>
           <button class="gb-btn" id="gbShare">Invite</button>
           <div class="gb-riders" id="gbRiders"></div>
-          <button class="gb-btn" id="gbChat" aria-label="Pack messages">💬<i class="btn-badge" id="gbChatBadge" hidden>0</i></button>
+            <button class="gb-btn" id="gbChat" aria-label="Pack messages"><svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21 12a8 8 0 0 1-8 8H4.5l2.1-2.6A8 8 0 1 1 21 12Z"/><path d="M8.5 10.5h7"/><path d="M8.5 13.5h4.5"/></svg><i class="btn-badge" id="gbChatBadge" hidden>0</i></button>
           <button class="gb-btn" id="gbMe">Status</button>
         </div>
       </div>
@@ -555,7 +565,7 @@
           <p><b>When you join a group ride.</b> While a ride room is open, your display name, status (riding normal, fuel stop, SOS), live position and course are published to a public MQTT broker so other riders in the room can see you. Room codes are short and the broker is unauthenticated: anyone who knows or guesses the code can subscribe. Phone browsers pause location updates when the app is backgrounded or the screen is off — other riders will see a “not updating” state until you return.</p>
           <p><b>What we deliberately do not send.</b> We do not send your phone number, your saved vehicles, your fill-up history or your photos in ride telemetry.</p>
           <p><b>How to stop sharing.</b> End the ride, or close the tab. Share only while the ride is live; ending a ride removes you from the room and publishes a leave message.</p>
-          <p><b>Maps and routing.</b> Vector map tiles come from OpenFreeMap, satellite imagery from Esri, routing from OSRM, search from Nominatim, and toll detection from Overpass. Those requests include the coordinates or search terms you type. If you enable Live Traffic, your own TomTom key is kept in this browser’s storage and sent only to TomTom with the traffic tile requests.</p>
+          <p><b>Maps and routing.</b> Vector map tiles come from OpenFreeMap, satellite imagery from Esri, routing from TomTom (when your key has routing access) or OSRM/Valhalla, search from Nominatim, and toll detection from Overpass. Those requests include the coordinates or search terms you type. If you enable Live Traffic, your own TomTom key is kept in this browser’s storage and sent only to TomTom, with the traffic tile requests and — while the key has routing access — the route requests that produce traffic-aware ETAs.</p>
           <p><b>Deleting your data.</b> Garage → sign out clears the account but keeps logs. To erase everything, clear site data for this app in your browser settings.</p>
         </div>
       </div>
@@ -616,8 +626,8 @@
 <template id="tpl-vehicle">
   <form class="form" id="vehForm">
     <div class="seg" id="vehTypeSeg">
-      <button type="button" class="seg-b active" data-type="Bike">🏍 Bike</button>
-      <button type="button" class="seg-b" data-type="Car">🚗 Car</button>
+      <button type="button" class="seg-b active" data-type="Bike"><svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="5.4" cy="16.6" r="3.4"/><circle cx="18.6" cy="16.6" r="3.4"/><path d="M5.4 16.6 10 8.6h3.4l2.6 4.6"/><path d="M8.6 8.6h4.8"/><path d="m13.4 13.2 1.8 3.4"/></svg> Bike</button>
+      <button type="button" class="seg-b" data-type="Car"><svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3.8 15.6v-2.8l2-4.6h12.4l2 4.6v2.8"/><path d="M3.8 15.6h16.4"/><path d="M6 12.8h12"/><circle cx="7.6" cy="15.8" r="1.9"/><circle cx="16.4" cy="15.8" r="1.9"/></svg> Car</button>
     </div>
     <label class="field"><span>Name</span><input name="name" type="text" placeholder="e.g. RE Himalayan 450" required /></label>
     <div class="grid2">

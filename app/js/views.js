@@ -9,6 +9,7 @@ import {
   $, $$, esc, toast, money, rupees, km, dateShort, todayISO, haptic, openSheet,
 } from './ui.js';
 import { vehicleStats, scenarioRange, gradeCosts, formatKmpl } from './stats.js';
+import { uiIcon } from './navicons.js';
 import { openVehicleSheet, openOdometerSheet, openPricesSheet, openChainSheet } from './sheets.js';
 import { PRICES_VERIFIED } from './places.js';
 import { priceSourceLabel, refreshFuelPrices } from './prices.js';
@@ -26,7 +27,7 @@ export function renderHome() {
       const b = document.createElement('button');
       b.type = 'button';
       b.className = `veh-chip ${v.id === state.activeVehicleId ? 'active' : ''}`;
-      b.innerHTML = `<span>${v.type === 'Car' ? '🚗' : '🏍️'}</span><span>${esc(v.name)}</span>`;
+      b.innerHTML = `<span>${uiIcon(v.type === 'Car' ? 'car' : 'bike')}</span><span>${esc(v.name)}</span>`;
       b.addEventListener('click', () => {
         setActiveVehicle(v.id);
         haptic(6);
@@ -63,7 +64,7 @@ export function renderHome() {
 
   $('#heroThumb').innerHTML = veh.photo
     ? `<img src="${veh.photo}" alt="">`
-    : (veh.type === 'Car' ? '🚗' : '🏍️');
+    : uiIcon(veh.type === 'Car' ? 'car' : 'bike');
   $('#heroName').textContent = veh.name;
   $('#heroOdo').textContent = km(veh.odo);
   $('#heroKmpl').textContent = formatKmpl(stats.kmpl);
@@ -113,7 +114,7 @@ export function renderHome() {
       btn.textContent = 'Checking…';
       const row = await refreshFuelPrices({ force: true });
       toast(row ? `Updated for ${row.name}` : 'Price feed unreachable — keeping current rates', {
-        icon: row ? '⛽' : '📡',
+        icon: row ? 'fuel' : 'dish',
         type: row ? 'ok' : 'warn',
       });
       renderRefuel();
@@ -185,7 +186,7 @@ export function renderRefuel() {
   const select = $('#refuelVehSelect');
   if (select) {
     select.innerHTML = state.vehicles.map((v) => (
-      `<option value="${esc(v.id)}" ${v.id === state.activeVehicleId ? 'selected' : ''}>${v.type === 'Car' ? '🚗' : '🏍️'} ${esc(v.name)}</option>`
+      `<option value="${esc(v.id)}" ${v.id === state.activeVehicleId ? 'selected' : ''}>${v.type} · ${esc(v.name)}</option>`
     )).join('');
   }
 
@@ -335,11 +336,11 @@ function saveRefuel() {
   if ($('#refuelDate')) $('#refuelDate').value = todayISO();
 
   if (suspect) {
-    toast('Saved, but that mileage looks off — it is excluded from your average', { type: 'warn', icon: '⚠', ms: 5000 });
+    toast('Saved, but that mileage looks off — it is excluded from your average', { type: 'warn', icon: 'warn', ms: 5000 });
   } else if (fullTank && kmpl > 0) {
-    toast(`Saved · ${kmpl.toFixed(1)} km/L on this tank`, { icon: '⛽' });
+    toast(`Saved · ${kmpl.toFixed(1)} km/L on this tank`, { icon: 'fuel' });
   } else {
-    toast('Saved · mileage will be measured at your next full tank', { icon: '⛽' });
+    toast('Saved · mileage will be measured at your next full tank', { icon: 'fuel' });
   }
 
   haptic([8, 30, 8]);
@@ -459,7 +460,7 @@ export function renderGarage() {
     const row = document.createElement('div');
     row.className = `row-item veh-row ${active ? 'active' : ''}`;
     row.innerHTML = `
-      <div class="veh-avatar">${v.photo ? `<img src="${v.photo}" alt="" loading="lazy" decoding="async">` : (v.type === 'Car' ? '🚗' : '🏍️')}</div>
+      <div class="veh-avatar">${v.photo ? `<img src="${v.photo}" alt="" loading="lazy" decoding="async">` : uiIcon(v.type === 'Car' ? 'car' : 'bike')}</div>
       <div class="li-main">
         <div class="li-t">${esc(v.name)} ${active ? '<span class="tag">active</span>' : ''}</div>
         <div class="li-s">${v.type} · ${formatKmpl(stats.kmpl)} km/L ${stats.measured ? '(measured)' : '(estimate)'} · ODO ${km(v.odo)}</div>

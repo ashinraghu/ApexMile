@@ -5,6 +5,7 @@
 // is never committed to this repository.
 import { bus } from './bus.js';
 import { distanceM } from './geo.js';
+import { uiIcon } from './navicons.js';
 
 const maplibregl = window.maplibregl;
 
@@ -640,7 +641,7 @@ export function setDest(lat, lng, label = 'Destination') {
   if (!mapCtl._destMarker) {
     const el = document.createElement('div');
     el.className = 'mk-dest';
-    el.innerHTML = '<span>🏁</span>';
+    el.innerHTML = uiIcon('flag');
     mapCtl._destMarker = new maplibregl.Marker({ element: el, anchor: 'bottom' })
       .setLngLat([lng, lat])
       .addTo(map);

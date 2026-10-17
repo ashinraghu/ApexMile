@@ -17,7 +17,9 @@ import {
 } from './journey.js';
 import {
   localSuggest, remoteSuggest, geocode, reverseDistrict, reversePlace, formatDistance,
+  setTomTomRoutingKey,
 } from './routing.js';
+import { uiIcon } from './navicons.js';
 import {
   nav, startNavigation, stopNavigation, toggleVoice, setVoice, enterImmersive, exitImmersive,
 } from './nav.js';
@@ -64,9 +66,11 @@ function boot() {
   applyTheme(state.theme);
   applyMotion(state.motion);
   // The traffic key is a rider setting; hand it to the map before the radar is
-  // opened so a restored overlay is live from the first frame.
+  // opened so a restored overlay is live from the first frame. The same key
+  // unlocks traffic-aware routing when it carries the Routing products.
   mapCtl.setTrafficKey(state.trafficKey);
   mapCtl.setTraffic(Boolean(state.trafficOn && state.trafficKey));
+  setTomTomRoutingKey(state.trafficKey);
 
   initSheets();
   initRefuel();
@@ -126,7 +130,7 @@ function initAuth() {
     enterApp();
     startGeolocation();
     detectRegion();
-    toast(`Welcome, ${name.split(' ')[0]}`, { icon: '👋' });
+    toast(`Welcome, ${name.split(' ')[0]}`, { icon: 'check' });
   });
 
   $('#authName')?.addEventListener('keydown', (e) => {
@@ -203,7 +207,7 @@ function showJoinScreen(invite) {
     renderAll();
     detectRegion();
     go('radar');
-    toast('You are live on the radar', { icon: '📡' });
+    toast('You are live on the radar', { icon: 'dish' });
     return true;
   };
 
@@ -302,14 +306,14 @@ function initHeader() {
     save();
     applyTheme(next);
     syncMapTheme();
-    toast(`Theme: ${next}`, { icon: '🎨', ms: 1600 });
+    toast(`Theme: ${next}`, { icon: 'info', ms: 1600 });
   });
 
   $('#syncBadge')?.addEventListener('click', () => {
     const label = ride.active
       ? `Room ${ride.code} · ${ride.status} · ${ride.peers.size} other rider${ride.peers.size === 1 ? '' : 's'}`
       : 'Solo. Start a group ride to appear on other riders’ maps.';
-    toast(label, { icon: '📡', ms: 4200 });
+    toast(label, { icon: 'dish', ms: 4200 });
   });
 
   window.addEventListener('scroll', () => {
@@ -387,7 +391,7 @@ function openSyncSheet() {
         closeSheet();
         if (!ride.active) { openTripSheet(); return; }
         reconnectRide();
-        toast('Reconnecting to the ride room…', { icon: '📡' });
+        toast('Reconnecting to the ride room…', { icon: 'dish' });
       });
     },
   });
@@ -405,7 +409,7 @@ function initSettings() {
     syncVoiceUi();
     haptic(8);
     toast(on ? 'Voice navigation on' : 'Voice navigation muted — saved', {
-      icon: on ? '🔊' : '🔇',
+      icon: on ? 'voice-on' : 'voice-off',
       ms: 2000,
     });
   });
@@ -452,7 +456,8 @@ function openTrafficSheet() {
   openSheet({
     title: 'Live traffic',
     html: `
-      <p class="hint">Live traffic paints colour-coded flow over the map. It needs a free TomTom key —
+      <p class="hint">Live traffic paints colour-coded flow over the map, and the same key unlocks
+        traffic-aware routes and ETAs when it has routing access. It needs a free TomTom key —
         TomTom includes 50,000 tile requests a day and does not ask for a card.</p>
       <label class="field"><span>TomTom API key</span>
         <input id="trafficKeyInput" type="text" autocomplete="off" autocapitalize="off"
@@ -460,9 +465,10 @@ function openTrafficSheet() {
       </label>
       <p class="hint" id="trafficKeyStatus" role="status" hidden></p>
       <p class="hint">Create one at <b>developer.tomtom.com</b> → API &amp; SDK Keys, and on that key
-        enable the <b>Traffic</b> products (simplest: select all available products). If you set a
-        domain restriction, include this app's domain. The key is verified against TomTom before it
-        is saved, and it never leaves this device.</p>
+        enable the <b>Traffic</b> and <b>Routing</b> products (simplest: select all available products).
+        Without routing access, routes and ETAs fall back to the standard (no live traffic) estimates —
+        clearly labelled. If you set a domain restriction, include this app's domain. The key is
+        verified against TomTom before it is saved, and it never leaves this device.</p>
       <div class="sheet-actions">
         ${current
           ? '<button class="btn ghost" type="button" id="trafficRemove">Remove key</button>'
@@ -493,6 +499,7 @@ function openTrafficSheet() {
         saveNow();
         mapCtl.setTrafficKey(key);
         mapCtl.setTraffic(true);
+        setTomTomRoutingKey(key); // a new key gets a fresh chance at routing access
         syncLayerPills();
         closeSheet();
         toast(verdict === 'quota' || verdict === 'unreachable'
@@ -506,6 +513,7 @@ function openTrafficSheet() {
         saveNow();
         mapCtl.setTrafficKey('');
         mapCtl.setTraffic(false);
+        setTomTomRoutingKey('');
         syncLayerPills();
         closeSheet();
         toast('Live traffic key removed');
@@ -516,7 +524,52 @@ function openTrafficSheet() {
 
 /* ------------------------------------------------------------------ radar */
 
+/** One search bar at rest; tapping it expands the origin/destination fields. */
+function expandSearch(focus = true) {
+  const box = $('#searchBox');
+  if (!box) return;
+  box.classList.add('expanded');
+  if (focus) $('#destInput')?.focus();
+}
+
+function collapseSearch() {
+  $('#searchBox')?.classList.remove('expanded');
+}
+
+/* ------------------------------------------------------------------ Google Maps handoff */
+
+function openExternal(url) {
+  window.open(url, '_blank', 'noopener,noreferrer');
+}
+
+/** Directions handoff: Google's own turn-by-turn for the current plan. */
+function gmapsDirectionsUrl() {
+  const to = journey.dest;
+  if (!to) return null;
+  const from = journey.origin
+    || (geo.pos ? { lat: geo.pos.lat, lng: geo.pos.lng } : null)
+    || (currentRoute()?.coords?.[0] ? { lat: currentRoute().coords[0][1], lng: currentRoute().coords[0][0] } : null);
+  const travelmode = journey.mode === 'walk' ? 'walking' : 'driving';
+  const origin = from ? `&origin=${from.lat},${from.lng}` : '';
+  return `https://www.google.com/maps/dir/?api=1${origin}`
+    + `&destination=${to.lat},${to.lng}&travelmode=${travelmode}`;
+}
+
+/** Traffic-map handoff: Google Maps opened on this area with live traffic on. */
+function gmapsTrafficUrl() {
+  const map = mapCtl.mapCtl.map;
+  const c = map?.getCenter?.() || geo.pos || { lat: 12.9716, lng: 77.5946 };
+  const z = (map?.getZoom?.() || 13).toFixed(1);
+  return `https://www.google.com/maps/@${c.lat},${c.lng},${z}z/data=!5m1!1e1`;
+}
+
 function initRadarUi() {
+  $('#searchBox')?.addEventListener('click', () => expandSearch(false));
+  $('#gmapsPill')?.addEventListener('click', () => openExternal(gmapsTrafficUrl()));
+  $('#rsGmapsBtn')?.addEventListener('click', () => {
+    const url = gmapsDirectionsUrl();
+    if (url) openExternal(url);
+  });
   $('#fabZoomIn')?.addEventListener('click', () => mapCtl.mapCtl.map?.zoomIn());
   $('#fabZoomOut')?.addEventListener('click', () => mapCtl.mapCtl.map?.zoomOut());
   $('#fabPitch')?.addEventListener('click', () => {
@@ -600,7 +653,7 @@ function initRadarUi() {
     state.navVoice = on;
     saveNow();
     syncVoiceUi();
-    toast(on ? 'Voice on' : 'Voice muted', { icon: on ? '🔊' : '🔇', ms: 1400 });
+    toast(on ? 'Voice on' : 'Voice muted', { icon: on ? 'voice-on' : 'voice-off', ms: 1400 });
   });
 
   $('#gbShare')?.addEventListener('click', openInviteSheet);
@@ -636,10 +689,13 @@ function initRadarUi() {
 
   $('#trafficSetupBtn')?.addEventListener('click', openTrafficSheet);
 
-  // Tapping empty map dismisses the keyboard and suggestions.
+  // Tapping empty map dismisses the keyboard and suggestions, and folds an
+  // empty search panel back to the single bar.
   $('#map')?.addEventListener('click', () => {
     hideSuggestions();
     $('#destInput')?.blur();
+    const empty = !($('#destInput')?.value || '').trim() && !($('#originInput')?.value || '').trim() && !journey.dest;
+    if (empty) collapseSearch();
   });
 }
 
@@ -736,7 +792,7 @@ function renderSuggestions(items, query, merged) {
   const box = $('#acList');
   if (!box) return;
   if (!items.length) {
-    if (merged) box.innerHTML = `<div class="ac-item"><span class="ac-ico">🔎</span><span class="ac-mid"><span class="ac-t">No match for “${esc(query)}”</span><span class="ac-s">Try a landmark or town name</span></span></div>`;
+    if (merged) box.innerHTML = `<div class="ac-item"><span class="ac-ico">${uiIcon('search')}</span><span class="ac-mid"><span class="ac-t">No match for “${esc(query)}”</span><span class="ac-s">Try a landmark or town name</span></span></div>`;
     box.hidden = !merged;
     return;
   }
@@ -746,7 +802,7 @@ function renderSuggestions(items, query, merged) {
     btn.type = 'button';
     btn.className = 'ac-item';
     btn.innerHTML = `
-      <span class="ac-ico">${item.source === 'local' ? '📍' : '🧭'}</span>
+      <span class="ac-ico">${uiIcon(item.source === 'local' ? 'pin' : 'compass')}</span>
       <span class="ac-mid">
         <span class="ac-t">${esc(item.name)}</span>
         <span class="ac-s">${esc(item.sub || '')}</span>
@@ -811,8 +867,8 @@ function startVoiceSearch() {
   rec.interimResults = false;
   rec.maxAlternatives = 1;
   const btn = $('#micBtn');
-  btn.textContent = '🔴';
-  toast('Listening…', { icon: '🎙', ms: 1800 });
+  btn?.classList.add('rec');
+  toast('Listening…', { icon: 'mic', ms: 1800 });
   rec.onresult = (ev) => {
     const text = ev.results?.[0]?.[0]?.transcript?.trim();
     if (!text) return;
@@ -820,8 +876,8 @@ function startVoiceSearch() {
     submitDestination();
   };
   rec.onerror = () => toast('Did not catch that', { type: 'warn' });
-  rec.onend = () => { btn.textContent = '🎙'; };
-  try { rec.start(); } catch { btn.textContent = '🎙'; }
+  rec.onend = () => { btn?.classList.remove('rec'); };
+  try { rec.start(); } catch { btn?.classList.remove('rec'); }
 }
 
 /* ------------------------------------------------------------------ journey events */
@@ -841,6 +897,7 @@ function onJourneyUpdate({ cleared } = {}) {
     if (cost) cost.hidden = true;
     const etas = $('#modeEtas');
     if (etas) etas.hidden = true;
+    collapseSearch();
     refreshModeUi();
     return;
   }
@@ -851,7 +908,7 @@ function onJourneyUpdate({ cleared } = {}) {
     $('#rsEta').textContent = 'Planning…';
     $('#rsDist').textContent = '';
     $('#rsSub').textContent = `Best ${MODE_META[journey.mode]?.label.toLowerCase() || ''} route`;
-    $('#rsNote').textContent = 'Checking roads, turns and tolls.';
+    $('#rsNote').textContent = 'Checking roads, turns and traffic.';
     const cost = $('#rsCost');
     if (cost) cost.hidden = true;
     refreshModeUi();
@@ -881,7 +938,14 @@ function onJourneyUpdate({ cleared } = {}) {
   const mins = Math.max(1, Math.round(route.duration / 60));
   $('#rsEta').textContent = mins < 60 ? `${mins} min` : `${Math.floor(mins / 60)} hr ${mins % 60} min`;
   $('#rsDist').textContent = `${est.km >= 10 ? est.km.toFixed(1) : est.km.toFixed(2)} km`;
-  $('#rsSub').textContent = `${MODE_META[journey.mode]?.label || 'Route'} · ${clockTime(est.arrival)} arrival`;
+  const basis = route.etaSource === 'tomtom' ? 'traffic-aware ETA' : 'standard estimate';
+  $('#rsSub').textContent = `${MODE_META[journey.mode]?.label || 'Route'} · ${clockTime(est.arrival)} arrival · ${basis}`;
+  // A finished plan folds the search panel back to one bar showing the place.
+  if (!nav.active) {
+    $('#destInput').value = journey.dest.name;
+    $('#destClear').hidden = false;
+    collapseSearch();
+  }
 
   const alts = $('#alts');
   if (journey.routes.length > 1) {
@@ -939,7 +1003,7 @@ function onDirectionsPressed() {
   }
   if (!journey.dest) {
     $('#destInput')?.focus();
-    toast('Where to?', { icon: '📍', ms: 1800 });
+    toast('Where to?', { icon: 'pin', ms: 1800 });
     return;
   }
   if (hasRoute()) {
@@ -960,7 +1024,7 @@ function renderModeEtas(route) {
     b.type = 'button';
     b.className = `mode-eta ${journey.mode === mode ? 'active' : ''}`;
     b.setAttribute('aria-pressed', journey.mode === mode ? 'true' : 'false');
-    b.innerHTML = `<span>${MODE_META[mode].icon} ${MODE_META[mode].label}</span><b>${mins} min</b>`;
+    b.innerHTML = `<span>${uiIcon(MODE_META[mode].icon)} ${MODE_META[mode].label}</span><b>${mins} min</b>`;
     b.addEventListener('click', () => {
       if (journey.mode === mode) return;
       haptic(6);
@@ -972,6 +1036,15 @@ function renderModeEtas(route) {
   }
 }
 
+/** The honest sentence about where this ETA came from, plus what traffic costs. */
+function etaBasisSentence(route) {
+  if (route?.etaSource === 'tomtom') {
+    const delay = Math.round((route.trafficDelay || 0) / 60);
+    return `Traffic-aware ETA from TomTom${delay >= 1 ? ` — traffic adds about ${delay} min on this route` : ''}.`;
+  }
+  return 'Standard estimate — planned without live traffic.';
+}
+
 function renderRouteCost(route) {
   const host = $('#rsCost');
   if (!host) return;
@@ -979,9 +1052,11 @@ function renderRouteCost(route) {
   if (!est) { host.hidden = true; return; }
   host.hidden = false;
 
+  const basis = etaBasisSentence(route);
+
   if (est.mode === 'walk') {
     host.innerHTML = '<div class="rs-cost-row"><span>Walking</span><b>No fuel or tolls</b></div>';
-    $('#rsNote').textContent = 'Pedestrian route. No fuel or toll cost.';
+    $('#rsNote').textContent = `${basis} Pedestrian route. No fuel or toll cost.`;
     return;
   }
 
@@ -1011,16 +1086,16 @@ function renderRouteCost(route) {
     <div class="rs-cost-row"><span class="fine">${est.measured ? `At your measured ${est.kmpl.toFixed(1)} km/L` : `At an estimated ${est.kmpl.toFixed(1)} km/L`} · ₹${(state.region.prices[state.octane] || 0).toFixed(2)}/L</span></div>`;
 
   if (est.mode === 'bike') {
-    $('#rsNote').textContent = 'Bikes are toll-free on national highways. Fuel uses your own mileage.';
+    $('#rsNote').textContent = `${basis} Bikes are toll-free on national highways. Fuel uses your own mileage.`;
   } else if (!info) {
-    $('#rsNote').textContent = 'Looking for toll plazas along this route…';
+    $('#rsNote').textContent = `${basis} Looking for toll plazas along this route…`;
   } else if (info.unavailable) {
-    $('#rsNote').textContent = 'Toll estimate unavailable for a route this long. Fuel cost is still included.';
+    $('#rsNote').textContent = `${basis} Toll estimate unavailable for a route this long. Fuel cost is still included.`;
   } else {
     const noCar = est.vehicleType && est.vehicleType !== 'Car'
       ? `No car in the garage — fuel uses ${est.vehicleName}'s mileage. `
       : '';
-    $('#rsNote').textContent = `${noCar}Tolls estimated from ${info.count} mapped plaza${info.count === 1 ? '' : 's'} at ₹${info.rate}/plaza. Actual FASTag rates vary.`;
+    $('#rsNote').textContent = `${basis} ${noCar}Tolls estimated from ${info.count} mapped plaza${info.count === 1 ? '' : 's'} at ₹${info.rate}/plaza. Actual FASTag rates vary.`;
   }
 }
 
@@ -1120,7 +1195,7 @@ async function startRideFromModal({ trip, dest }) {
   if (ride.isCaptain) setRideMode(journey.mode);
   // Never block the ride on a permission dialog.
   requestNotifications().catch(() => {});
-  toast(`Room ${ride.code} is live`, { icon: '📡', ms: 3000 });
+  toast(`Room ${ride.code} is live`, { icon: 'dish', ms: 3000 });
 
   if (dest) {
     const place = await geocode(dest);
@@ -1301,7 +1376,7 @@ async function detectRegion(force = false) {
         source: '',
       });
     }
-    if (force) toast(`Rates for ${state.region.city}, ${state.region.state}`, { icon: '⛽' });
+    if (force) toast(`Rates for ${state.region.city}, ${state.region.state}`, { icon: 'fuel' });
     renderAll();
     refreshFuelPrices({ force: true }).catch(() => {});
   } finally {
@@ -1401,7 +1476,7 @@ function wireBus() {
     const now = Date.now();
     if (now - lastGeoErrAt < 15000) return;
     lastGeoErrAt = now;
-    toast(message, { type: 'warn', icon: '📍', ms: 5200 });
+    toast(message, { type: 'warn', icon: 'pin', ms: 5200 });
   });
 
   bus.on('journey:update', onJourneyUpdate);
@@ -1435,10 +1510,10 @@ function wireBus() {
         // Every broker in the list failed repeatedly: that's not congestion,
         // it's a network that blocks public relays — say so and offer the out.
         offlineGuided = true;
-        toast('No ride broker reachable on this network — some networks block them. Try mobile data, or set a custom broker in Ride settings', { type: 'err', icon: '📡', ms: 7000 });
+        toast('No ride broker reachable on this network — some networks block them. Try mobile data, or set a custom broker in Ride settings', { type: 'err', icon: 'dish', ms: 7000 });
       } else if (!offlineGuided && Date.now() - lastRideOfflineToast > 20000) {
         lastRideOfflineToast = Date.now();
-        toast('Ride sync is offline — position sharing will resume when the connection returns', { type: 'warn', icon: '📡', ms: 4500 });
+        toast('Ride sync is offline — position sharing will resume when the connection returns', { type: 'warn', icon: 'dish', ms: 4500 });
       }
     }
   });
@@ -1456,7 +1531,7 @@ function wireBus() {
           setMyStatus('On my way', { sos: false });
           publishNow();
           closeSheet();
-          toast('Location shared', { icon: '📍' });
+          toast('Location shared', { icon: 'pin' });
         });
       },
     });
@@ -1465,10 +1540,10 @@ function wireBus() {
   bus.on('ride:captain-state', async (pkt) => {
     if (!pkt?.dest) return;
     if (nav.active) {
-      toast(`${pkt.captainName || 'Captain'} set a new pack destination — end this route to pick it up`, { icon: '📡', ms: 5000 });
+      toast(`${pkt.captainName || 'Captain'} set a new pack destination — end this route to pick it up`, { icon: 'dish', ms: 5000 });
       return;
     }
-    toast(`${pkt.captainName || 'Captain'} set the destination: ${pkt.dest.name}`, { icon: '📡', ms: 5000 });
+    toast(`${pkt.captainName || 'Captain'} set the destination: ${pkt.dest.name}`, { icon: 'dish', ms: 5000 });
     if (pkt.mode && pkt.mode !== journey.mode) {
       setMode(pkt.mode, { explicit: false });
       refreshModeUi();
@@ -1508,7 +1583,7 @@ function wireBus() {
   });
 
   bus.on('map:fallback', () => {
-    toast('Map service is slow — switched to a lighter basemap', { icon: '🗺', ms: 4200 });
+    toast('Map service is slow — switched to a lighter basemap', { icon: 'info', ms: 4200 });
   });
 
   bus.on('map:longpress', async ({ lat, lng }) => {
@@ -1532,7 +1607,7 @@ function wireBus() {
         body.querySelector('#pinShare')?.addEventListener('click', () => {
           setRideDestination(place, false);
           closeSheet();
-          toast('Pack destination updated', { icon: '📡' });
+          toast('Pack destination updated', { icon: 'dish' });
         });
       },
     });
@@ -1640,7 +1715,7 @@ function navStateBinding() {
 function wireNetwork() {
   const update = () => {
     renderSync();
-    if (!navigator.onLine) toast('You are offline. Saved data still works; maps need a connection.', { type: 'warn', icon: '📴', ms: 4200 });
+    if (!navigator.onLine) toast('You are offline. Saved data still works; maps need a connection.', { type: 'warn', icon: 'offline', ms: 4200 });
   };
   window.addEventListener('online', update);
   window.addEventListener('offline', update);

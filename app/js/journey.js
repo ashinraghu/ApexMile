@@ -24,9 +24,9 @@ export const journey = {
 
 export const MODES = ['bike', 'car', 'walk'];
 export const MODE_META = {
-  bike: { label: 'Bike', icon: '🏍', kmh: 33 },
-  car: { label: 'Car', icon: '🚗', kmh: 38 },
-  walk: { label: 'Walk', icon: '🚶', kmh: 4.8 },
+  bike: { label: 'Bike', icon: 'bike', kmh: 33 },
+  car: { label: 'Car', icon: 'car', kmh: 38 },
+  walk: { label: 'Walk', icon: 'walk', kmh: 4.8 },
 };
 
 /** Minutes for any mode, using this route's own duration when it matches. */
