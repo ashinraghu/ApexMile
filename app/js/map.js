@@ -65,6 +65,11 @@ const mapCtl = {
   _meEl: null,
   _accuracySourceReady: false,
   _lastAccDraw: 0,
+  _lastAcc: null,
+  _lastAccPosition: null,
+  _lastCameraFollow: null,
+  _progressRenderedAt: 0,
+  _progressIndex: -1,
   _peerMarkers: new Map(),
   _destMarker: null,
   _stopMarkers: [],
@@ -213,8 +218,12 @@ function useFallbackStyle(map, reason) {
     map.once('style.load', () => {
       mapCtl.ready = true;
       ensureLayers();
-      if (mapCtl._route) { drawRouteGeometry(); drawAlternatives(); }
-      if (mapCtl._lastAcc) setAccuracy(mapCtl._lastAcc);
+      if (mapCtl._route) {
+        drawRouteGeometry();
+        drawAlternatives();
+        if (mapCtl._progress > 0) setRouteProgress(mapCtl._progress, { force: true });
+      }
+      if (mapCtl._lastAccPosition) setAccuracy(mapCtl._lastAccPosition, { force: true });
       bus.emit('map:fallback');
     });
   } catch (err) {
@@ -237,10 +246,10 @@ export function setStylePreset(preset) {
     ensureLayers();
     if (mapCtl._route) {
       drawRouteGeometry();
-      if (mapCtl._progress) setRouteProgress(mapCtl._progress);
+      if (mapCtl._progress > 0) setRouteProgress(mapCtl._progress, { force: true });
     }
     if (mapCtl._alts) drawAlternatives();
-    if (mapCtl._lastAcc) setAccuracy(mapCtl._lastAcc);
+    if (mapCtl._lastAccPosition) setAccuracy(mapCtl._lastAccPosition, { force: true });
   });
 }
 
@@ -448,8 +457,9 @@ export function setMe(pos) {
     mapCtl._meMarker.setLngLat([pos.lng, pos.lat]);
   }
   mapCtl._mePos = pos;
+  mapCtl._lastAccPosition = pos;
   applyBeamRotation(pos.heading || 0);
-  if (Date.now() - mapCtl._lastAccDraw > 1800) setAccuracy(pos);
+  if (!mapCtl.navigating) setAccuracy(pos);
 }
 
 function scheduleBeam() {
@@ -476,13 +486,18 @@ function applyBeamRotation(heading) {
   if (arrow) arrow.style.transform = `rotate(${turn}deg)`;
 }
 
-function setAccuracy(pos) {
+function setAccuracy(pos, { force = false } = {}) {
   const map = mapCtl.map;
-  if (!map || !mapCtl.ready || !map.getSource('apex-acc')) return;
-  mapCtl._lastAccDraw = Date.now();
+  if (!map || !mapCtl.ready || mapCtl.navigating || !map.getSource('apex-acc')) return;
+  const now = Date.now();
+  const previous = mapCtl._lastAcc;
+  const moved = previous ? distanceM(previous, pos) : Infinity;
+  const accuracyChanged = previous ? Math.abs((previous.acc || 0) - (pos.acc || 0)) : Infinity;
+  if (!force && now - mapCtl._lastAccDraw < 5000 && moved < 12 && accuracyChanged < 20) return;
+  mapCtl._lastAccDraw = now;
   mapCtl._lastAcc = pos;
   const r = Math.min(Math.max(pos.acc || 10, 4), 250);
-  const points = 48;
+  const points = 32;
   const coords = [];
   const latRad = (pos.lat * Math.PI) / 180;
   const dLat = (r / 111320);
@@ -554,9 +569,12 @@ export function drawRoute({ coords, alts = [], mode = 'bike', dimDone = false })
   mapCtl._route = { coords, mode };
   mapCtl._alts = alts;
   mapCtl._routeVisible = true;
+  mapCtl._progress = 0;
+  mapCtl._progressIndex = -1;
+  mapCtl._progressRenderedAt = 0;
   drawRouteGeometry();
   drawAlternatives();
-  if (dimDone) setRouteProgress(0);
+  if (dimDone) setRouteProgress(0, { force: true });
 }
 
 function drawRouteGeometry() {
@@ -595,7 +613,7 @@ function drawAlternatives() {
  * Split the line so the ridden part is grey and the road ahead stays blue.
  * `cut` is derived from progress along the polyline (0..1).
  */
-export function setRouteProgress(progress) {
+export function setRouteProgress(progress, { force = false } = {}) {
   const map = mapCtl.map;
   const r = mapCtl._route;
   if (!map || !mapCtl.ready || !r) return;
@@ -603,6 +621,11 @@ export function setRouteProgress(progress) {
   mapCtl._progress = p;
   const total = r.coords.length;
   const cut = Math.min(total - 1, Math.max(0, Math.round(p * (total - 1))));
+  const now = Date.now();
+  const movedVertices = Math.abs(cut - mapCtl._progressIndex);
+  const minVertexDelta = Math.max(3, Math.ceil(total * 0.001));
+  if (!force && (cut === mapCtl._progressIndex
+    || (now - mapCtl._progressRenderedAt < 2000 && movedVertices < minVertexDelta))) return;
 
   const ahead = { type: 'Feature', geometry: { type: 'LineString', coordinates: r.coords.slice(cut) }, properties: {} };
   const doneCoords = r.coords.slice(0, cut + 1);
@@ -613,6 +636,8 @@ export function setRouteProgress(progress) {
   try {
     map.getSource('apex-route')?.setData(ahead);
     map.getSource('apex-route-done')?.setData(done);
+    mapCtl._progressIndex = cut;
+    mapCtl._progressRenderedAt = now;
   } catch { /* style loading */ }
 }
 
@@ -620,6 +645,8 @@ export function clearRoute() {
   mapCtl._route = null;
   mapCtl._alts = null;
   mapCtl._progress = 0;
+  mapCtl._progressIndex = -1;
+  mapCtl._progressRenderedAt = 0;
   mapCtl._routeVisible = false;
   const map = mapCtl.map;
   if (map && mapCtl.ready) {
@@ -679,7 +706,9 @@ export function clearStops() {
 /* ------------------------------------------------------------------ camera */
 
 export function setFollow(on) {
-  mapCtl.follow = Boolean(on);
+  const next = Boolean(on);
+  if (mapCtl.follow !== next) mapCtl._lastCameraFollow = null;
+  mapCtl.follow = next;
   bus.emit('map:follow', mapCtl.follow);
 }
 
@@ -701,8 +730,16 @@ export function currentBearing() {
 }
 
 export function setNavigating(on) {
-  mapCtl.navigating = Boolean(on);
-  if (on) setFollow(true);
+  const next = Boolean(on);
+  if (mapCtl.navigating === next) return;
+  mapCtl.navigating = next;
+  mapCtl._lastCameraFollow = null;
+  if (next) {
+    try { mapCtl.map?.getSource('apex-acc')?.setData({ type: 'FeatureCollection', features: [] }); } catch { /* style loading */ }
+    setFollow(true);
+  } else if (mapCtl._lastAccPosition) {
+    setAccuracy(mapCtl._lastAccPosition, { force: true });
+  }
 }
 
 /**
@@ -714,6 +751,17 @@ export function cameraFollow(pos, { heading = null, speed = 0, mode = 'bike', fo
   if (!map || !mapCtl.ready || !mapCtl.follow) return;
 
   const kmh = Math.max(0, speed || 0);
+  const now = Date.now();
+  const previous = mapCtl._lastCameraFollow;
+  const moved = previous ? distanceM(previous.pos, pos) : Infinity;
+  const headingChange = previous && heading != null && previous.heading != null
+    ? Math.abs(((heading - previous.heading + 540) % 360) - 180)
+    : 0;
+  const movementThreshold = Math.max(6, (kmh / 3.6) * 1.2);
+  if (previous && now - previous.at < 900 && moved < movementThreshold && headingChange < 18) return;
+  if (previous && moved < 2 && headingChange < 8 && now - previous.at < 2800) return;
+  mapCtl._lastCameraFollow = { at: now, pos: { lat: pos.lat, lng: pos.lng }, heading };
+
   const walking = mode === 'walk';
   let zoom = walking ? 17.6 : 17.4;
   if (!walking) {
@@ -723,7 +771,7 @@ export function cameraFollow(pos, { heading = null, speed = 0, mode = 'bike', fo
     else if (kmh > 10) zoom = 17.0;
   }
 
-  const duration = Math.min(1000, Math.max(450, 700 - kmh * 3));
+  const duration = Math.min(750, Math.max(350, 600 - kmh * 2));
   const opts = {
     center: [pos.lng, pos.lat],
     zoom,
@@ -750,6 +798,7 @@ export function cameraFollow(pos, { heading = null, speed = 0, mode = 'bike', fo
 export function recenter(pos, { zoom = 17.2, pitch = 0, bearing = 0, duration = 500 } = {}) {
   const map = mapCtl.map;
   if (!map || !mapCtl.ready || !pos) return;
+  mapCtl._lastCameraFollow = null;
   map.easeTo({
     center: [pos.lng, pos.lat],
     zoom,

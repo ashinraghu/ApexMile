@@ -30,9 +30,12 @@ export const geo = {
   status: 'idle', // idle | prompting | watching | denied | error | unsupported
   error: null,
   _watchId: null,
+  profile: 'passive', // passive is lower-power; navigation opts into a precise fix
   _altBuf: [],
   _lastFixAt: 0,
   _lastSaveAt: 0,
+  _lastEmitAt: 0,
+  _lastEmitPos: null,
 };
 
 function smoothAltitude(meters) {
@@ -80,14 +83,24 @@ function handlePosition(p) {
 
   smoothAltitude(next.alt);
   state.lastPos = { lat: next.lat, lng: next.lng, acc: next.acc, ts: now };
-  // Persist the last fix at most every 20 s; one localStorage write per GPS
-  // tick is wasteful and hurts battery.
-  if (!geo._lastSaveAt || now - geo._lastSaveAt > 20000) {
+  // Persist at most once a minute; serializing the entire local state on every
+  // high-accuracy navigation fix would add avoidable main-thread work.
+  if (!geo._lastSaveAt || now - geo._lastSaveAt > 60000) {
     geo._lastSaveAt = now;
     save();
   }
 
-  bus.emit('geo:fix', next);
+  // GPS can report several nearly identical fixes per second while stopped.
+  // Keep the freshest position for one-shot callers, but avoid waking every
+  // map/UI listener unless the rider moved or a short refresh interval passed.
+  const movedSinceEmit = geo._lastEmitPos ? distanceM(geo._lastEmitPos, next) : Infinity;
+  const minMove = geo.profile === 'navigation' ? 1.5 : 8;
+  const minInterval = geo.profile === 'navigation' ? 1000 : 5000;
+  if (!geo._lastEmitPos || movedSinceEmit >= minMove || now - geo._lastEmitAt >= minInterval) {
+    geo._lastEmitAt = now;
+    geo._lastEmitPos = { lat: next.lat, lng: next.lng };
+    bus.emit('geo:fix', next);
+  }
 }
 
 function handleError(err) {
@@ -104,6 +117,19 @@ function handleError(err) {
   });
 }
 
+export function setTrackingProfile(profile) {
+  const next = profile === 'navigation' ? 'navigation' : 'passive';
+  if (geo.profile === next) return;
+  geo.profile = next;
+  geo._lastEmitAt = 0;
+  geo._lastEmitPos = null;
+  if (geo._watchId != null) {
+    navigator.geolocation.clearWatch(geo._watchId);
+    geo._watchId = null;
+    startGeolocation();
+  }
+}
+
 export function startGeolocation() {
   if (!('geolocation' in navigator)) {
     geo.status = 'unsupported';
@@ -114,11 +140,13 @@ export function startGeolocation() {
 
   geo.status = geo.pos ? 'watching' : 'prompting';
   bus.emit('geo:status', geo.status);
-
+  geo._lastEmitAt = 0;
+  geo._lastEmitPos = null;
+  const precise = geo.profile === 'navigation';
   geo._watchId = navigator.geolocation.watchPosition(handlePosition, handleError, {
-    enableHighAccuracy: true,
-    maximumAge: 1000,
-    timeout: 25000,
+    enableHighAccuracy: precise,
+    maximumAge: precise ? 2500 : 20000,
+    timeout: precise ? 25000 : 45000,
   });
   return true;
 }
@@ -131,14 +159,14 @@ export function stopGeolocation() {
   }
 }
 
-/** One-shot high-accuracy fix (used by the recalibrate button). */
-export function freshFix({ timeout = 12000 } = {}) {
+/** One-shot fix. Recalibration is precise; region lookup can request a cheaper fix. */
+export function freshFix({ timeout = 12000, highAccuracy = true, maximumAge = 0 } = {}) {
   return new Promise((resolve, reject) => {
     if (!('geolocation' in navigator)) return reject(new Error('unsupported'));
     navigator.geolocation.getCurrentPosition(
       (p) => { handlePosition(p); resolve(geo.pos); },
       (e) => { handleError(e); reject(e); },
-      { enableHighAccuracy: true, maximumAge: 0, timeout },
+      { enableHighAccuracy: Boolean(highAccuracy), maximumAge: Math.max(0, maximumAge), timeout },
     );
   });
 }

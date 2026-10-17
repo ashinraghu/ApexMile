@@ -37,7 +37,7 @@ Toll charges on the route sheet come from OpenStreetMap toll plazas and gantries
 
 ### Group riding, privately-ish
 
-Ride telemetry carries your display name, role, mode, position, heading, speed and status — **never your phone number, vehicles, photos or fill-ups**. Transport is the public EMQX demo broker over WSS; rooms are six characters and unauthenticated, so treat the room code as the secret. The captain's destination is the only retained message, and ending a ride clears it. Location updates pause when the browser backgrounds the app; riders then show as “not updating”.
+Ride telemetry carries your display name, role, mode, position, heading, speed and status — **never your phone number, vehicles, photos or fill-ups**. Transport is the public EMQX demo broker over WSS; rooms are six characters and unauthenticated, so treat the room code as the secret. The captain's destination is the only retained message, and ending a ride clears it. Location updates pause when the browser backgrounds the app; the last position is marked “not updating”, while a low-rate presence heartbeat keeps the room alive without coordinates.
 
 ---
 
@@ -76,17 +76,20 @@ not apply to a Worker, so the repo contains a root `wrangler.jsonc`:
 }
 ```
 
-The Worker script is tiny: it serves `/api/fuel-prices` (a cached proxy for the
-daily fuel feed) and hands every other request to the static assets. In the
-Worker's build settings keep:
+The Worker also serves `/api/places`, a five-minute edge-cached Photon
+(OpenStreetMap) search proxy, and `/api/fuel-prices`, the daily fuel-feed proxy.
+Every other request goes to the static assets. If deployed as Pages without the
+Worker, place search falls back to Photon directly and fuel prices use their
+public feed. In the Worker's build settings keep:
 
 - **Build command:** none
 - **Deploy command:** `npx wrangler deploy`
 - **Root directory:** `/`
 
 `_headers`, `sw.js` and the manifest are served from `app/` exactly as they are
-on Pages. If you deploy `app/` as **Pages** instead, there is no Worker: the app
-detects the missing `/api/fuel-prices` route and calls the public feed directly.
+on Pages. If you deploy `app/` as **Pages** instead, the app detects missing
+Worker API routes: place search calls Photon directly and fuel prices use the
+public feed.
 
 The URL is `https://<worker-name>.<account>.workers.dev`; attach a custom domain
 under **Settings → Domains & Routes**.
@@ -150,13 +153,13 @@ app/
     icons/            SVG + PNG icons, maskable, apple-touch
   js/
     main.js           boot, auth/join, tabs, wiring
-    store.js          versioned localStorage (apexmile.v10) + legacy import
+    store.js          versioned localStorage (apexmile.v11) + legacy import
     stats.js          full-tank windows, measured km/L, cost/range models
     bus.js            tiny event bus
     ui.js             DOM helpers, toasts, sheets, theme, install helpers
     geo.js            single GPS watcher, altitude smoothing
     map.js            MapLibre styles, markers, route layers, camera
-    routing.js        local place index + Nominatim + OSRM
+    routing.js        curated local index + Photon search + submitted Nominatim fallback + routing
     journey.js        planned route state, stops, alternatives
     nav.js            turn-by-turn, announcements, reroute, progress
     navicons.js       vector manoeuvre/voice/group symbols
@@ -165,22 +168,23 @@ app/
     views.js          home/refuel/insights/garage rendering
     prices.js         daily fuel feed, freshness, manual override
     places.js         generated place + district price index
-  worker.js (repo root)  /api/fuel-prices proxy + static assets binding
+  worker.js (repo root)  cached /api/places + /api/fuel-prices + static assets binding
 ```
 
 **Data** lives under one key, `apexmile.v11`; the v10 key (`apexmile.v10`) is migrated once, and the original prototype's key (`apexmile_map_radar_v9`) is imported once. Photos are downscaled and, if storage is full, dropped before any log is lost.
 
-**Services**: OpenFreeMap vector styles, Esri World Imagery for satellite, Carto raster fallback, OSRM demo routing, Nominatim search, Overpass toll plazas, The Core's daily fuel-price JSON through the Worker, and the public EMQX/HiveMQ/Eclipse/Mosquitto MQTT brokers are all keyless. **Live traffic** is the one opt-in exception: paste a free TomTom key in Ride settings (or from the map's traffic pill) and the flow overlay is drawn locally — the key never enters the repository. Each service is rate-limited or best-effort; the UI degrades with a message instead of failing silently.
+**Services**: OpenFreeMap vector styles, Esri World Imagery for satellite, Carto raster fallback, Photon interactive search, Nominatim explicit-search fallback, OSRM/Valhalla routing, Overpass toll plazas, The Core's daily fuel-price JSON and Photon queries through the Worker, and the public EMQX/HiveMQ/Mosquitto MQTT brokers are keyless. **Live traffic** is the one opt-in exception: paste a TomTom key in Ride settings. Public search/routing services are best-effort; no OSM-based index guarantees the coverage of Google's proprietary Places directory.
 
 ## Known limits
 
-- The public routing/search/broker services have no SLA. A busy day can mean slower suggestions or a failed reroute.
-- Browsers suspend GPS in the background; the radar is a foreground aid, not a satellite tracker or emergency service. SOS is a status flag, not a call for help.
-- There is no backend, account system or push notification server. Everything personal stays on the device.
+- The public routing/search/broker services have no SLA. Photon and Nominatim use OpenStreetMap data; a small private apartment or enclave may be unmapped. Try the extended-search submission, add the place to OSM, or use a map pin. Google-level completeness requires a licensed provider and API key/billing.
+- The continuous GPS watch runs only while Radar is open or a group ride is active; other tabs use no continuous watch. Outside guidance, Radar uses the browser's lower-power passive profile. High-accuracy GPS is enabled only during guidance, and all tracking pauses while the app is hidden. The radar is a foreground aid, not a satellite tracker or emergency service. SOS is a status flag, not a call for help.
+- The screen, cellular radio, GPS and GPU are still substantial power/heat sources during long navigation. The app throttles camera/route redraw work and avoids idle high-accuracy tracking, but cannot control screen brightness, device thermal limits or background policy.
+- There is no ApexMile account/data backend or push-notification service. The Worker only proxies/caches public place and fuel responses; local records stay on-device, while the group-ride and search requests described above go to their third-party services.
 - Turn-by-turn times are OSRM estimates without live traffic. The Live Traffic layer is a visual flow overlay: it does not re-time the route or the ETA.
 - Fuel prices are the daily district rate, not the price at a specific pump; tolls are an OSM-based estimate, not a FASTag/NHAI quote.
 - iOS opens shared invite links in Safari rather than inside the installed PWA; the room code and in-app *Join a ride* screen cover that gap.
 
 ## Licence / attribution
 
-Map data © OpenStreetMap contributors (ODbL). OpenFreeMap, Esri, CARTO, OSRM and Nominatim attributions are shown on the map or in the privacy screen. Do not remove them. `app/` is the maintained implementation; the original single-file prototype was used only as the source for the audit (`REVIEW.md`) and the place/price index.
+Map data © OpenStreetMap contributors (ODbL). OpenFreeMap, Esri, CARTO, OSRM, Photon and Nominatim attributions are shown on the map, in the search list or in the privacy screen. Do not remove them. `app/` is the maintained implementation; the original single-file prototype was used only as the source for the audit (`REVIEW.md`) and the place/price index.

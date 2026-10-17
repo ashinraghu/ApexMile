@@ -8,7 +8,7 @@ import {
   $, $$, toast, haptic, applyTheme, applyMotion, initSheets, isStandalone, isIOS,
   onSystemThemeChange, clockTime, esc, openSheet, closeSheet,
 } from './ui.js';
-import { geo, startGeolocation, freshFix, distanceM, bearingDeg, speedKmph } from './geo.js';
+import { geo, startGeolocation, stopGeolocation, freshFix, distanceM, bearingDeg, speedKmph } from './geo.js';
 import * as mapCtl from './map.js';
 import {
   journey, plan, setDestination, setOrigin, setMode, clear as clearJourney,
@@ -16,7 +16,7 @@ import {
   currentRoute, estimates, hasRoute, MODES, MODE_META, modeRoute,
 } from './journey.js';
 import {
-  localSuggest, remoteSuggest, geocode, reverseDistrict, reversePlace, formatDistance,
+  localSuggest, remoteSuggest, rankSuggestions, geocode, reverseDistrict, reversePlace, formatDistance,
   setTomTomRoutingKey,
 } from './routing.js';
 import { uiIcon } from './navicons.js';
@@ -133,8 +133,6 @@ function initAuth() {
     state.createdAt = state.createdAt || Date.now();
     saveNow();
     enterApp();
-    startGeolocation();
-    detectRegion();
     toast(`Welcome, ${name.split(' ')[0]}`, { icon: 'check' });
   });
 
@@ -170,7 +168,6 @@ function enterApp() {
   syncTravelMode();
   renderAll();
   renderSync();
-  startGeolocation();
   detectRegion();
   go(hashTab() || 'home', { replace: true });
 }
@@ -208,7 +205,6 @@ function showJoinScreen(invite) {
     await requestNotifications();
     joinRide(invite.room);
     if (invite.trip) ride.trip = invite.trip;
-    startGeolocation();
     renderAll();
     detectRegion();
     go('radar');
@@ -254,6 +250,13 @@ function hashTab() {
   return m && TABS.includes(m[1]) ? m[1] : null;
 }
 
+function syncGeolocationTracking() {
+  const visible = document.visibilityState !== 'hidden';
+  const needed = currentTab === 'radar' || nav.active || ride.active;
+  if (visible && (state.signedIn || ride.active) && needed) startGeolocation();
+  else stopGeolocation();
+}
+
 function go(tab, { replace = false, fromHistory = false } = {}) {
   if (!TABS.includes(tab)) tab = 'home';
   // Claim the tab before ending guidance: the nav:end handler needs to know
@@ -264,6 +267,7 @@ function go(tab, { replace = false, fromHistory = false } = {}) {
   // The map is the whole screen during guidance, so leaving it would leave the
   // rider staring at a blank page. Treat it like closing navigation.
   if (leavingRadar) stopNavigation({ reason: 'Navigation ended' });
+  syncGeolocationTracking();
 
   for (const el of $$('.tab')) el.hidden = el.dataset.tab !== tab;
   for (const btn of $$('.tb')) btn.classList.toggle('active', btn.dataset.tab === tab);
@@ -718,6 +722,8 @@ async function openRadar() {
     });
   }
   mapCtl.resize();
+  if (geo.pos) mapCtl.setMe(geo.pos);
+  if (ride.active) syncPeersToMap();
   if (!hasRoute() && geo.pos && !nav.active) {
     setTimeout(() => mapCtl.recenter(geo.pos, { zoom: 15.8, duration: 400 }), 260);
   }
@@ -771,36 +777,52 @@ function onDestTyped() {
   const input = $('#destInput');
   const q = input.value.trim();
   $('#destClear').hidden = !q;
+  const token = ++suggestionsToken;
+  clearTimeout(onDestTyped._timer);
   if (q.length < 2) { hideSuggestions(); return; }
 
   const local = localSuggest(q, geo.pos, 6);
   renderSuggestions(local, q, false);
-  if (!navigator.onLine) return;
-
-  const token = ++suggestionsToken;
-  clearTimeout(onDestTyped._timer);
-  onDestTyped._timer = setTimeout(async () => {
-    try {
-      const remote = await remoteSuggest(q, 5);
-      if (token !== suggestionsToken) return;
-      const merged = [...local];
-      for (const r of remote) {
-        if (!merged.some((m) => Math.abs(m.lat - r.lat) < 0.002 && Math.abs(m.lng - r.lng) < 0.002)) merged.push(r);
-      }
-      renderSuggestions(merged.slice(0, 7), q, true);
-    } catch { /* suggestions are best-effort */ }
-  }, 320);
-}
-
-function renderSuggestions(items, query, merged) {
-  const box = $('#acList');
-  if (!box) return;
-  if (!items.length) {
-    if (merged) box.innerHTML = `<div class="ac-item"><span class="ac-ico">${uiIcon('search')}</span><span class="ac-mid"><span class="ac-t">No match for “${esc(query)}”</span><span class="ac-s">Try a landmark or town name</span></span></div>`;
-    box.hidden = !merged;
+  if (!navigator.onLine) {
+    renderSuggestions(local, q, true);
     return;
   }
+
+  // Photon is designed for interactive OSM search. Nominatim is deliberately
+  // reserved for explicit submissions so typing cannot hammer its public API.
+  onDestTyped._timer = setTimeout(async () => {
+    try {
+      const remote = await remoteSuggest(q, 10);
+      if (token !== suggestionsToken) return;
+      renderSuggestions(rankSuggestions([...local, ...remote], q, 7), q, true);
+    } catch {
+      if (token !== suggestionsToken) return;
+      renderSuggestions(local, q, true);
+    }
+  }, 380);
+}
+
+function renderSuggestions(items, query, settled) {
+  const box = $('#acList');
+  if (!box) return;
   box.innerHTML = '';
+
+  if (!items.length && !settled) {
+    const pending = document.createElement('div');
+    pending.className = 'ac-message';
+    pending.textContent = 'Searching map places…';
+    box.append(pending);
+    box.hidden = false;
+    return;
+  }
+
+  if (!items.length) {
+    const empty = document.createElement('div');
+    empty.className = 'ac-message';
+    empty.textContent = 'No matching listings found yet.';
+    box.append(empty);
+  }
+
   items.forEach((item) => {
     const btn = document.createElement('button');
     btn.type = 'button';
@@ -809,9 +831,9 @@ function renderSuggestions(items, query, merged) {
       <span class="ac-ico">${uiIcon(item.source === 'local' ? 'pin' : 'compass')}</span>
       <span class="ac-mid">
         <span class="ac-t">${esc(item.name)}</span>
-        <span class="ac-s">${esc(item.sub || '')}</span>
+        <span class="ac-s">${esc(item.sub || item.category || '')}</span>
       </span>
-      <span class="ac-d">${item.dist != null ? `${(item.dist / 1000).toFixed(1)} km` : ''}</span>`;
+      <span class="ac-d">${Number.isFinite(item.dist) ? `${(item.dist / 1000).toFixed(1)} km` : ''}</span>`;
     btn.addEventListener('click', () => {
       $('#destInput').value = item.name;
       $('#destClear').hidden = false;
@@ -821,10 +843,26 @@ function renderSuggestions(items, query, merged) {
     });
     box.append(btn);
   });
+
+  if (settled && query.trim()) {
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'ac-item ac-more';
+    more.innerHTML = `<span class="ac-ico">${uiIcon('search')}</span><span class="ac-mid"><span class="ac-t">Try extended search for “${esc(query)}”</span><span class="ac-s">Checks a second map index; coverage still depends on map data</span></span>`;
+    more.addEventListener('click', () => submitDestination());
+    box.append(more);
+  }
+
+  const attribution = document.createElement('div');
+  attribution.className = 'ac-footer';
+  attribution.textContent = 'OpenStreetMap contributors · Photon';
+  box.append(attribution);
   box.hidden = false;
 }
 
 function hideSuggestions() {
+  suggestionsToken += 1;
+  clearTimeout(onDestTyped._timer);
   const box = $('#acList');
   if (box) box.hidden = true;
 }
@@ -1387,7 +1425,7 @@ async function detectRegion(force = false) {
   regionBusy = true;
   try {
     let pos = geo.pos;
-    if (!pos) pos = await freshFix({ timeout: 9000 }).catch(() => null);
+    if (!pos) pos = await freshFix({ timeout: 9000, highAccuracy: false, maximumAge: 20000 }).catch(() => null);
     if (!pos) return;
 
     const nearest = FUEL_REGIONS
@@ -1433,6 +1471,7 @@ async function detectRegion(force = false) {
 
 function handleSignOut() {
   state.signedIn = false;
+  stopGeolocation();
   saveNow();
   leaveRide({ silent: true });
   $('#app').hidden = true;
@@ -1493,9 +1532,11 @@ function registerServiceWorker() {
 
 function wireBus() {
   bus.on('geo:fix', (pos) => {
-    mapCtl.setMe(pos);
+    // Navigation supplies the route-aligned puck itself; do not update it twice
+    // for every GPS callback.
+    if (!nav.active && currentTab === 'radar') mapCtl.setMe(pos);
     const now = Date.now();
-    if (now - geoFixStamp > 1500) {
+    if (now - geoFixStamp > 4000) {
       geoFixStamp = now;
       const sub = $('#topSub');
       if (sub) {
@@ -1506,7 +1547,10 @@ function wireBus() {
       }
       const alt = $('#heroAlt');
       if (alt) alt.textContent = state.altitude != null ? `${state.altitude} m` : '— m';
-      syncPeersToMap();
+      if (ride.active) {
+        if (currentTab === 'radar') syncPeersToMap();
+        else updateGroupUi();
+      }
     }
     if (!hasRoute() && mapInitialised && currentTab === 'radar' && !nav.active && mapCtl.mapCtl._meMarker && !mapCtl.isFollowing()) {
       // First fix after opening the radar: bring the rider into view.
@@ -1527,6 +1571,7 @@ function wireBus() {
   bus.on('journey:update', onJourneyUpdate);
 
   bus.on('ride:changed', () => {
+    syncGeolocationTracking();
     updateGroupUi();
     renderSync();
     renderSyncTransport();
@@ -1540,7 +1585,8 @@ function wireBus() {
   });
 
   bus.on('ride:peers', () => {
-    syncPeersToMap();
+    if (currentTab === 'radar') syncPeersToMap();
+    else updateGroupUi();
     renderSync();
   });
 
@@ -1744,17 +1790,6 @@ function wireBus() {
     });
   });
 
-  navStateBinding();
-}
-
-function navStateBinding() {
-  const map = () => mapCtl.mapCtl;
-  // Keep the FAB state honest when the map pans itself during nav.
-  setInterval(() => {
-    if (!map().ready) return;
-    if (!nav.active) return;
-    $('#fabLocate')?.classList.toggle('on', mapCtl.isFollowing());
-  }, 1200);
 }
 
 /* ------------------------------------------------------------------ network */
@@ -1766,12 +1801,23 @@ function wireNetwork() {
   };
   window.addEventListener('online', update);
   window.addEventListener('offline', update);
-  window.addEventListener('pagehide', saveNow);
+  window.addEventListener('pagehide', () => {
+    saveNow();
+    stopGeolocation();
+  });
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && ride.active) {
+    if (document.visibilityState !== 'visible') {
+      // Background GPS is unreliable in mobile browsers and needlessly warms
+      // the device. Resume the selected profile when the rider returns.
+      stopGeolocation();
+      return;
+    }
+    syncGeolocationTracking();
+    if (ride.active && geo.pos && Date.now() - geo.pos.ts < 30000) {
       import('./rooms.js').then((m) => m.publishNow());
     }
   });
+  window.addEventListener('pageshow', syncGeolocationTracking);
 }
 
 /* ------------------------------------------------------------------ start */

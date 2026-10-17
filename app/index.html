@@ -31,7 +31,7 @@
   style-src 'self' 'unsafe-inline';
   img-src 'self' data: blob: https://api.tomtom.com https://tiles.openfreemap.org https://*.basemaps.cartocdn.com https://*.tile.openstreetmap.org https://server.arcgisonline.com https://*.arcgisonline.com;
   font-src 'self';
-  connect-src 'self' https://api.tomtom.com https://tiles.openfreemap.org https://*.basemaps.cartocdn.com https://server.arcgisonline.com https://*.arcgisonline.com https://router.project-osrm.org https://valhalla1.openstreetmap.de https://nominatim.openstreetmap.org https://overpass-api.de https://energy.thecore.in wss://broker.emqx.io:8084 wss://broker.hivemq.com:8884 wss://mqtt-dashboard.com:8884 wss://test.mosquitto.org:8081;
+  connect-src 'self' https://api.tomtom.com https://tiles.openfreemap.org https://*.basemaps.cartocdn.com https://server.arcgisonline.com https://*.arcgisonline.com https://router.project-osrm.org https://valhalla1.openstreetmap.de https://nominatim.openstreetmap.org https://photon.komoot.io https://overpass-api.de https://energy.thecore.in wss://broker.emqx.io:8084 wss://broker.hivemq.com:8884 wss://mqtt-dashboard.com:8884 wss://test.mosquitto.org:8081;
   worker-src 'self' blob:;
   child-src 'self' blob:;
   manifest-src 'self';
@@ -555,11 +555,11 @@
       <div class="card">
         <div class="card-title">Privacy, plainly</div>
         <div class="prose">
-          <p><b>On your device.</b> Your name, phone (if you add it), vehicles, fill-ups, odometer and photos are stored in this browser’s local storage. They are not uploaded to us — there is no “us” server.</p>
-          <p><b>When you join a group ride.</b> While a ride room is open, your display name, status (riding normal, fuel stop, SOS), live position and course are published to a public MQTT broker so other riders in the room can see you. Room codes are short and the broker is unauthenticated: anyone who knows or guesses the code can subscribe. Phone browsers pause location updates when the app is backgrounded or the screen is off — other riders will see a “not updating” state until you return.</p>
+          <p><b>On your device.</b> Your name, phone (if you add it), vehicles, fill-ups, odometer and photos are stored in this browser’s local storage; ApexMile has no account/data server. A small Worker only proxies public place and fuel lookups. Group-ride and map-search requests are sent to the third-party services described below.</p>
+          <p><b>When you join a group ride.</b> While a ride room is open, your display name, status (riding normal, fuel stop, SOS), live position and course are published to a public MQTT broker so other riders in the room can see you. Room codes are short and the broker is unauthenticated: anyone who knows or guesses the code can subscribe. Phone browsers pause location updates when the app is backgrounded or the screen is off — other riders see your last position as “not updating”. A low-rate presence heartbeat keeps the room alive without sending coordinates until you return.</p>
           <p><b>What we deliberately do not send.</b> We do not send your phone number, your saved vehicles, your fill-up history or your photos in ride telemetry.</p>
           <p><b>How to stop sharing.</b> End the ride, or close the tab. Share only while the ride is live; ending a ride removes you from the room and publishes a leave message.</p>
-          <p><b>Maps and routing.</b> Vector map tiles come from OpenFreeMap, satellite imagery from Esri, routing from TomTom (when your key has routing access) or OSRM/Valhalla, search from Nominatim, and toll detection from Overpass. Those requests include the coordinates or search terms you type. If you enable Live Traffic, your own TomTom key is kept in this browser’s storage and sent only to TomTom, with the traffic tile requests and — while the key has routing access — the route requests that produce traffic-aware ETAs.</p>
+          <p><b>Maps and routing.</b> Vector map tiles come from OpenFreeMap, satellite imagery from Esri, routing from TomTom (when your key has routing access) or OSRM/Valhalla, live place search from Photon/OpenStreetMap, and toll detection from Overpass. An explicit search fallback may also use Nominatim. Search sends the text you enter and, when available, a coarsened nearby position to rank matches; place-search results may be cached at the edge for five minutes. Routing and reverse-geocoding send the coordinates needed for those features. These are community map indexes, not Google's complete place directory; unmapped private buildings may not appear. If you enable Live Traffic, your TomTom key stays in this browser’s storage and is sent only to TomTom.</p>
           <p><b>Deleting your data.</b> Garage → sign out clears the account but keeps logs. To erase everything, clear site data for this app in your browser settings.</p>
         </div>
       </div>
@@ -574,7 +574,7 @@
           <p><b>Mount your phone.</b> Use a bar mount and keep it out of direct sun. A glove-friendly tap is better than a squeeze at speed.</p>
           <p><b>The radar is an aid, not a rescue service.</b> Pack-gap alerts use GPS and can be wrong under tunnels, flyovers or dead zones. Do not rely on the app alone to keep a group together.</p>
           <p><b>SOS is a status flag.</b> Marking a breakdown warns riders in your room. It does not contact emergency services. In an emergency, call 112.</p>
-          <p><b>Battery and data.</b> Live riding uses GPS and mobile data continuously. Carry a charger on long rides; save offline maps by keeping the app open on the radar screen before you go off-network.</p>
+          <p><b>Battery and heat.</b> ApexMile runs continuous location only on Radar or during an active group ride; Radar uses lower-power GPS outside guidance, and high accuracy only while navigating. Location pauses when the app is backgrounded. Navigation still keeps the screen awake, which is a major drain. Lower screen brightness, use the Streets map instead of Satellite/Live Traffic when possible, and keep the phone shaded and ventilated. Open the radar before losing signal to cache nearby map tiles.</p>
         </div>
       </div>
     </section>

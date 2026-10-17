@@ -752,6 +752,10 @@ body.navigating .maplibregl-ctrl-bottom-right{ bottom:104px; }
 }
 .ac-item:last-child{ border-bottom:0; }
 .ac-item:active{ background:var(--bg-sunk); }
+.ac-more{ color:var(--blue); }
+.ac-more .ac-ico{ background:var(--blue-soft); }
+.ac-message{ padding:12px 14px; color:var(--text-3); font-size:12px; }
+.ac-footer{ padding:7px 13px 9px; color:var(--text-3); font-size:10px; }
 .ac-ico{
   width:32px; height:32px; flex:none; border-radius:9px; display:grid; place-items:center;
   background:var(--bg-sunk); font-size:15px;
@@ -1062,9 +1066,8 @@ body.navigating .mk-me .core{ display:none; }
 }
 .mk-me .core::after{
   content:""; position:absolute; inset:-9px; border-radius:50%;
-  border:2px solid rgba(10,108,255,.5); animation:mering 2.4s var(--ease-out) infinite;
+  border:2px solid rgba(10,108,255,.5); opacity:.38;
 }
-@keyframes mering{ 0%{ transform:scale(.6); opacity:.9;} 100%{ transform:scale(1.9); opacity:0;} }
 
 .mk-peer{ position:relative; display:flex; flex-direction:column; align-items:center; }
 .mk-peer .pin{

@@ -1,6 +1,7 @@
 // Search, geocoding and routing.
 //  • Instant local index first (no network, no rate limit)
-//  • Nominatim only after typing stops, one request at a time (usage policy)
+//  • Photon for interactive search; Nominatim only on explicit submissions,
+//    serialized to respect the public service's usage policy
 //  • TomTom for traffic-aware geometry + ETAs when the rider's key has
 //    routing access; Valhalla/OSRM free-flow with clear "standard estimate"
 //    labelling when it does not
@@ -8,6 +9,7 @@ import { PLACES } from './places.js';
 import { distanceM, geo } from './geo.js';
 import { maneuverKey } from './navicons.js';
 
+const PHOTON = 'https://photon.komoot.io/api/';
 const NOMINATIM = 'https://nominatim.openstreetmap.org';
 const OSRM = 'https://router.project-osrm.org';
 // Valhalla's public demo instance is the free way to get actual bicycle and
@@ -24,14 +26,40 @@ const VALHALLA_COSTING = { car: 'auto', bike: 'motorcycle', walk: 'pedestrian' }
 const norm = (s) => String(s || '').toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
 
 function scorePlace(place, q) {
+  const query = norm(q).trim();
   const name = norm(place.name);
   const sub = norm(place.sub);
-  if (name === q) return 0;
-  if (name.startsWith(q)) return 1;
-  if (name.split(/\s+/).some((w) => w.startsWith(q))) return 2;
-  if (name.includes(q)) return 3;
-  if (sub.includes(q)) return 4;
+  if (name === query) return 0;
+  if (name.startsWith(query)) return 1;
+  if (name.split(/\s+/).some((w) => w.startsWith(query))) return 2;
+  if (name.includes(query)) return 3;
+  if (sub.includes(query)) return 4;
   return 99;
+}
+
+export function rankSuggestions(items, query, limit = 7) {
+  const q = norm(query).trim();
+  const unique = [];
+  const seenIds = new Set();
+  for (const item of items || []) {
+    if (!item || !Number.isFinite(item.lat) || !Number.isFinite(item.lng)) continue;
+    const placeId = item.placeId || '';
+    const coordKey = `${item.lat.toFixed(4)},${item.lng.toFixed(4)}`;
+    const nameKey = `${norm(item.name)}|${coordKey}`;
+    if ((placeId && seenIds.has(placeId)) || seenIds.has(nameKey) || seenIds.has(coordKey)) continue;
+    if (placeId) seenIds.add(placeId);
+    seenIds.add(nameKey);
+    seenIds.add(coordKey);
+    unique.push(item);
+  }
+  unique.sort((a, b) => {
+    const score = scorePlace(a, q) - scorePlace(b, q);
+    if (score) return score;
+    const ad = Number.isFinite(a.dist) ? a.dist : Infinity;
+    const bd = Number.isFinite(b.dist) ? b.dist : Infinity;
+    return ad - bd;
+  });
+  return unique.slice(0, limit);
 }
 
 export function localSuggest(query, origin = geo.pos, limit = 6) {
@@ -39,89 +67,190 @@ export function localSuggest(query, origin = geo.pos, limit = 6) {
   const ref = origin || { lat: 12.97, lng: 77.59 };
   const scored = [];
   for (const place of PLACES) {
-    const s = q ? scorePlace(place, q) : 5;
-    if (s >= 99) continue;
-    scored.push({ ...place, score: s, dist: distanceM(ref, place) });
+    const score = q ? scorePlace(place, q) : 5;
+    if (score >= 99) continue;
+    scored.push({ ...place, score, dist: distanceM(ref, place) });
   }
   scored.sort((a, b) => a.score - b.score || a.dist - b.dist);
-  return scored.slice(0, limit).map((p) => ({
-    name: p.name,
-    sub: p.sub,
-    lat: p.lat,
-    lng: p.lng,
-    dist: p.dist,
+  return scored.slice(0, limit).map((place) => ({
+    name: place.name,
+    sub: place.sub,
+    lat: place.lat,
+    lng: place.lng,
+    dist: place.dist,
     source: 'local',
   }));
 }
 
-// Nominatim asks for at most one call per second. Keep a tiny queue so a fast
-// typist cannot get us blocked.
-let lastRemoteAt = 0;
-let remoteTimer = null;
-let remoteController = null;
+let photonController = null;
+const photonCache = new Map();
 
-function throttleRemote(fn) {
-  return new Promise((resolve, reject) => {
-    const wait = Math.max(0, 1100 - (Date.now() - lastRemoteAt));
-    clearTimeout(remoteTimer);
-    remoteTimer = setTimeout(async () => {
-      lastRemoteAt = Date.now();
-      try { resolve(await fn()); } catch (e) { reject(e); }
-    }, wait);
+function photonParams(query, limit) {
+  const params = new URLSearchParams({
+    q: query,
+    limit: String(Math.max(1, Math.min(12, limit))),
+    lang: 'en',
   });
+  if (geo.pos && Number.isFinite(geo.pos.lat) && Number.isFinite(geo.pos.lng)) {
+    params.set('lat', Number(geo.pos.lat).toFixed(2));
+    params.set('lon', Number(geo.pos.lng).toFixed(2));
+  }
+  return params;
 }
 
-export async function remoteSuggest(query, limit = 6) {
+async function fetchPhoton(params, signal) {
+  const options = { signal, headers: { Accept: 'application/geo+json, application/json' } };
+  const local = await fetch(`/api/places?${params}`, options);
+  if (local.ok) return local.json();
+  // A Pages deployment has no Worker route and normally returns the app shell.
+  // Fall back directly to Photon; the CSP explicitly permits this endpoint.
+  const direct = await fetch(`${PHOTON}?${params}`, options);
+  if (!direct.ok) throw new Error(`Search failed (${direct.status})`);
+  return direct.json();
+}
+
+function photonPlace(feature, query) {
+  const coords = feature?.geometry?.coordinates || [];
+  const properties = feature?.properties || {};
+  const lng = Number(coords[0]);
+  const lat = Number(coords[1]);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  const name = String(properties.name || properties.street || properties.city
+    || properties.town || properties.village || query).trim();
+  const context = [
+    properties.housenumber && properties.street
+      ? `${properties.housenumber} ${properties.street}` : properties.street,
+    properties.district, properties.locality, properties.city, properties.town,
+    properties.village, properties.county, properties.state, properties.postcode,
+    properties.country,
+  ].filter(Boolean);
+  const sub = [...new Map(context
+    .filter((part) => norm(part) !== norm(name))
+    .map((part) => [norm(part), part])).values()].join(', ');
+  return {
+    name: name.slice(0, 100),
+    sub: sub.slice(0, 160),
+    lat,
+    lng,
+    source: 'photon',
+    placeId: properties.osm_type && properties.osm_id
+      ? `${properties.osm_type}/${properties.osm_id}` : '',
+    category: String(properties.type || properties.osm_value || properties.osm_key || ''),
+  };
+}
+
+export async function remoteSuggest(query, limit = 10) {
   const q = String(query || '').trim();
   if (q.length < 2) return [];
-  remoteController?.abort();
-  const controller = new AbortController();
-  remoteController = controller;
+  const params = photonParams(q, limit);
+  const key = params.toString();
+  const cached = photonCache.get(key);
+  if (cached && Date.now() - cached.at < 5 * 60 * 1000) return cached.items;
 
-  return throttleRemote(async () => {
-    const url = `${NOMINATIM}/search?format=jsonv2&q=${encodeURIComponent(q)}&limit=${limit}&countrycodes=in&addressdetails=0&accept-language=en`;
-    const timer = setTimeout(() => controller.abort(), 12000);
-    let rows;
-    try {
-      const res = await fetch(url, {
-        signal: controller.signal,
-        headers: { Accept: 'application/json' },
-      });
-      if (!res.ok) throw new Error(`Search failed (${res.status})`);
-      rows = await res.json();
-    } finally {
-      clearTimeout(timer);
-    }
-    const ref = geo.pos || { lat: 12.97, lng: 77.59 };
-    return rows.map((r) => {
-      const lat = Number(r.lat);
-      const lng = Number(r.lon);
-      const parts = String(r.display_name || '').split(',');
-      return {
-        name: (r.name || parts[0] || q).trim(),
-        sub: parts.slice(1, 3).join(',').trim() || 'India',
-        lat,
-        lng,
-        dist: distanceM(ref, { lat, lng }),
-        source: 'remote',
-      };
-    }).filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lng));
+  photonController?.abort();
+  const controller = new AbortController();
+  photonController = controller;
+  const timer = setTimeout(() => controller.abort(), 9000);
+  try {
+    const data = await fetchPhoton(params, controller.signal);
+    const ref = geo.pos || null;
+    const items = rankSuggestions((data.features || [])
+      .map((feature) => photonPlace(feature, q))
+      .filter(Boolean), q, limit)
+      .map((place) => ({ ...place, dist: ref ? distanceM(ref, place) : Infinity }));
+    photonCache.set(key, { at: Date.now(), items });
+    if (photonCache.size > 80) photonCache.delete(photonCache.keys().next().value);
+    return items;
+  } finally {
+    clearTimeout(timer);
+    if (photonController === controller) photonController = null;
+  }
+}
+
+// Nominatim's public service is not an autocomplete backend. Forward search is
+// only after an explicit submit (Enter, voice or extended search); reverse
+// requests serve region detection / dropped pins. Serialize both request types
+// to respect the public service's one-request-per-second usage guidance.
+let nominatimQueue = Promise.resolve();
+let lastNominatimAt = 0;
+
+function nominatimJson(url, timeout = 12000) {
+  const run = async () => {
+    const wait = Math.max(0, 1100 - (Date.now() - lastNominatimAt));
+    if (wait) await new Promise((resolve) => setTimeout(resolve, wait));
+    lastNominatimAt = Date.now();
+    return fetchJson(url, timeout);
+  };
+  const task = nominatimQueue.then(run, run);
+  nominatimQueue = task.catch(() => {});
+  return task;
+}
+
+function nominatimSearchUrl(query, limit) {
+  const params = new URLSearchParams({
+    format: 'jsonv2', q: query, limit: String(Math.max(1, Math.min(12, limit))),
+    addressdetails: '1', 'accept-language': 'en',
   });
+  if (geo.pos && Number.isFinite(geo.pos.lat) && Number.isFinite(geo.pos.lng)) {
+    const biasLat = Number(geo.pos.lat.toFixed(2));
+    const biasLng = Number(geo.pos.lng.toFixed(2));
+    const latSpan = 2.5;
+    const lngSpan = Math.min(12, latSpan / Math.max(0.25, Math.cos((biasLat * Math.PI) / 180)));
+    params.set('viewbox', `${biasLng - lngSpan},${biasLat + latSpan},${biasLng + lngSpan},${biasLat - latSpan}`);
+    params.set('bounded', '0'); // proximity bias only; never hide a farther exact match
+  }
+  return `${NOMINATIM}/search?${params}`;
+}
+
+function nominatimPlace(row, query) {
+  const lat = Number(row.lat);
+  const lng = Number(row.lon);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  const a = row.address || {};
+  const name = String(row.name || a.amenity || a.building || a.shop || a.tourism || a.road
+    || String(row.display_name || '').split(',')[0] || query).trim();
+  const context = [
+    a.neighbourhood, a.suburb, a.city_district, a.city, a.town,
+    a.village, a.state_district, a.county, a.state, a.postcode, a.country,
+  ].filter(Boolean);
+  const sub = [...new Map(context
+    .filter((part) => norm(part) !== norm(name))
+    .map((part) => [norm(part), part])).values()].join(', ');
+  const ref = geo.pos || null;
+  return {
+    name: name.slice(0, 100),
+    sub: sub.slice(0, 160) || String(row.display_name || '').split(',').slice(1, 4).join(',').trim(),
+    lat,
+    lng,
+    dist: ref ? distanceM(ref, { lat, lng }) : Infinity,
+    source: 'nominatim',
+    placeId: row.osm_type && row.osm_id ? `${row.osm_type}/${row.osm_id}` : '',
+    category: String(row.type || row.class || ''),
+  };
+}
+
+async function nominatimSuggest(query, limit = 8) {
+  const rows = await nominatimJson(nominatimSearchUrl(query, limit));
+  return (rows || []).map((row) => nominatimPlace(row, query)).filter(Boolean);
 }
 
 export async function geocode(text) {
   const q = String(text || '').trim();
   if (!q) return null;
-  const local = localSuggest(q, geo.pos, 1)[0];
-  if (local && norm(local.name) === norm(q)) return local;
 
-  try {
-    const remote = await remoteSuggest(q, 1);
-    if (remote.length) return remote[0];
-  } catch (err) {
-    console.warn('[routing] geocode', err);
+  const local = localSuggest(q, geo.pos, 8);
+  let photon = [];
+  try { photon = await remoteSuggest(q, 10); } catch (err) {
+    if (err?.name !== 'AbortError') console.warn('[routing] Photon search', err);
   }
-  return local || null;
+  const photonBest = rankSuggestions([...photon, ...local], q, 1)[0];
+  if (photonBest && scorePlace(photonBest, q) <= 3) return photonBest;
+
+  let nominatim = [];
+  try { nominatim = await nominatimSuggest(q, 10); } catch (err) {
+    console.warn('[routing] Nominatim search', err);
+  }
+  return rankSuggestions([...photon, ...nominatim, ...local], q, 1)[0] || null;
 }
 
 /** Reverse geocode to a district name. Cached by ~1 km bucket. */
@@ -131,7 +260,7 @@ export async function reverseDistrict(lat, lng) {
   const key = `${lat.toFixed(2)},${lng.toFixed(2)}`;
   if (reverseCache.has(key)) return reverseCache.get(key);
   const url = `${NOMINATIM}/reverse?format=jsonv2&lat=${lat}&lon=${lng}&zoom=10&addressdetails=1&accept-language=en`;
-  const data = await fetchJson(url, 12000);
+  const data = await nominatimJson(url, 12000);
   const a = data.address || {};
   const city = a.city || a.town || a.county || a.state_district || a.village || '';
   const district = a.state_district || a.county || city;
@@ -150,12 +279,12 @@ export async function reversePlace(lat, lng) {
   const fallback = { name: 'Dropped pin', sub: `${lat.toFixed(5)}, ${lng.toFixed(5)}`, lat, lng };
   try {
     const url = `${NOMINATIM}/reverse?format=jsonv2&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1&accept-language=en`;
-    const data = await fetchJson(url, 12000);
+    const data = await nominatimJson(url, 12000);
     const a = data.address || {};
     const name = data.name
       || a.road || a.pedestrian || a.neighbourhood || a.suburb
       || a.village || a.town || a.city || 'Dropped pin';
-    const subParts = [a.suburb, a.city || a.town || a.village, a.state].filter(Boolean);
+    const subParts = [a.neighbourhood, a.suburb, a.city || a.town || a.village, a.state_district, a.state].filter(Boolean);
     return {
       name: String(name).slice(0, 80),
       sub: [...new Set(subParts)].join(', ').slice(0, 120),

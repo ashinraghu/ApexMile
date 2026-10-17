@@ -2,7 +2,7 @@
 // previews. Design notes:
 //   • Telemetry carries name, role, position and status — never the phone number.
 //   • Room codes are 6 characters from a 32-char alphabet (~1e9 combinations).
-//   • Presence is explicit: hello / pos heartbeat / bye, plus an MQTT will.
+//   • Presence is explicit: hello / position / coordinate-free heartbeat / bye, plus an MQTT will.
 //   • Captain ride state is the ONLY retained message, so a late joiner can pick
 //     up the destination. It is cleared when the ride ends.
 import { bus } from './bus.js';
@@ -25,7 +25,9 @@ const BROKERS = [
 const PREFIX = 'apexmile/v10/ride/';
 const ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
 const HEARTBEAT_MS = 12000;
-const TICK_MS = 3000;
+const TICK_MS = 5000;
+const HIDDEN_HEARTBEAT_MS = 30000;
+const HIDDEN_SWEEP_MS = 30000;
 const STALE_MS = 38000;
 const DROP_MS = 125000;
 
@@ -56,7 +58,9 @@ export const ride = {
   _channel: null,
   _tick: null,
   _sweep: null,
+  _visibilityHandler: null,
   _lastPub: 0,
+  _lastPresence: 0,
   _lastPos: null,
   _myStatus: 'Riding normal',
   _mySos: false,
@@ -232,8 +236,8 @@ function tryNextBroker(code) {
     const announce = () => {
       if (announced || !ride.active || ride.code !== code) return;
       announced = true;
-      publish({ t: 'hello', lat: geo.pos?.lat, lng: geo.pos?.lng });
-      publishPosition(geo.pos, true);
+      publish({ t: 'hello' });
+      publishPresence();
       if (ride.isCaptain) publishCaptainState();
     };
     client.subscribe([evTopic, stateTopic], { qos: 0 }, (err) => {
@@ -314,14 +318,16 @@ export function connectionInfo() {
 }
 
 function publish(packet) {
+  const now = Date.now();
   const full = {
     id: SELF_ID,
     name: myName(),
     role: ride.isCaptain ? 'Captain' : 'Member',
     mode: currentMode(),
-    ts: Date.now(),
+    ts: now,
     ...packet,
   };
+  ride._lastPresence = now;
   if (ride._client?.connected) {
     try {
       ride._client.publish(`${PREFIX}${ride.code}/ev`, JSON.stringify(full), { qos: 0 });
@@ -334,8 +340,9 @@ function publish(packet) {
 }
 
 function publishPosition(pos, force = false) {
-  if (!ride.active || !ride.code) return;
-  if (!pos) return;
+  if (!ride.active || !ride.code || !pos) return;
+  // Do not make an old fix look live after the page has been backgrounded.
+  if (document.visibilityState !== 'visible' || Date.now() - (pos.ts || 0) > 30000) return;
   publish({
     t: 'pos',
     lat: Number(pos.lat.toFixed(6)),
@@ -343,11 +350,20 @@ function publishPosition(pos, force = false) {
     heading: Math.round(pos.heading || 0),
     speed: Math.round((pos.speed || 0) * 3.6),
     acc: Math.round(pos.acc || 0),
+    fixAt: pos.ts || Date.now(),
     status: ride._myStatus,
     sos: ride._mySos,
   });
   ride._lastPub = Date.now();
   if (force) ride._lastPos = { lat: pos.lat, lng: pos.lng };
+}
+
+function publishPresence() {
+  if (document.visibilityState === 'visible' && geo.pos && Date.now() - geo.pos.ts <= 30000) {
+    publishPosition(geo.pos, true);
+  } else {
+    publish({ t: 'heartbeat' });
+  }
 }
 
 function currentMode() {
@@ -397,10 +413,17 @@ function handlePacket(pkt) {
     upsertPeer(pkt);
     if (isNew) {
       toast(`${pkt.name || 'A rider'} joined the ride`, { icon: 'check' });
-      // Help them see us immediately instead of waiting for the next heartbeat.
-      publishPosition(geo.pos, true);
+      // Reply with a current fix when available, otherwise only presence so an
+      // old location is never presented as live after a background pause.
+      publishPresence();
     }
     emitPeers();
+    return;
+  }
+
+  if (pkt.t === 'heartbeat') {
+    const peer = ride.peers.get(pkt.id);
+    if (peer) peer.seenAt = Date.now();
     return;
   }
 
@@ -431,20 +454,27 @@ function upsertPeer(pkt) {
   const prev = ride.peers.get(pkt.id) || {};
   const lat = Number(pkt.lat);
   const lng = Number(pkt.lng);
+  const hasPosition = Number.isFinite(lat) && Number.isFinite(lng);
+  const now = Date.now();
+  const candidateFixAt = Number(pkt.fixAt ?? pkt.ts);
+  const positionAt = hasPosition
+    ? (Number.isFinite(candidateFixAt) ? candidateFixAt : now)
+    : (prev.positionAt || 0);
   ride.peers.set(pkt.id, {
     id: pkt.id,
     name: String(pkt.name || 'Rider').slice(0, 24),
     role: pkt.role || 'Member',
     mode: pkt.mode || 'bike',
-    lat: Number.isFinite(lat) ? lat : prev.lat,
-    lng: Number.isFinite(lng) ? lng : prev.lng,
+    lat: hasPosition ? lat : prev.lat,
+    lng: hasPosition ? lng : prev.lng,
     heading: Number(pkt.heading) || 0,
     speed: Number(pkt.speed) || 0,
     status: String(pkt.status || prev.status || 'Riding normal').slice(0, 40),
     sos: Boolean(pkt.sos ?? prev.sos),
     color: prev.color || colorFor(pkt.id),
-    seenAt: Date.now(),
-    stale: false,
+    seenAt: now,
+    positionAt,
+    stale: !positionAt || now - positionAt > STALE_MS,
   });
 }
 
@@ -558,34 +588,51 @@ function openChannel(code) {
 function startLoops() {
   clearInterval(ride._tick);
   clearInterval(ride._sweep);
-  ride._tick = setInterval(() => {
+  if (ride._visibilityHandler) document.removeEventListener('visibilitychange', ride._visibilityHandler);
+
+  const tick = () => {
     if (!ride.active) return;
-    // No skip for a hidden screen: riders lock their phones mid-ride. GPS may
-    // freeze, but the heartbeat must not — otherwise every phone-in-pocket
-    // rider goes stale in 38 s and is dropped from the pack in two minutes.
+    const now = Date.now();
     const pos = geo.pos;
-    if (!pos) return;
+    if (document.visibilityState !== 'visible' || !pos || now - pos.ts > 30000) {
+      // Keep a room member present with a small heartbeat, but never resend a
+      // backgrounded/stale coordinate as if it were a current location.
+      if (now - ride._lastPresence >= HIDDEN_HEARTBEAT_MS) publish({ t: 'heartbeat' });
+      return;
+    }
     const moved = ride._lastPos ? distanceM(ride._lastPos, pos) : Infinity;
-    const due = Date.now() - ride._lastPub > HEARTBEAT_MS;
+    const due = now - ride._lastPub > HEARTBEAT_MS;
     if (moved > 6 || due) {
       publishPosition(pos, moved > 6);
       ride._lastPos = { lat: pos.lat, lng: pos.lng };
       ride._lastPub = Date.now();
     }
-  }, TICK_MS);
+  };
 
-  ride._sweep = setInterval(() => {
+  const sweep = () => {
     if (!ride.active) return;
     let changed = false;
     const now = Date.now();
     for (const [id, peer] of ride.peers) {
-      const age = now - peer.seenAt;
-      const stale = age > STALE_MS;
+      const presenceAge = now - peer.seenAt;
+      const locationAge = peer.positionAt ? now - peer.positionAt : Infinity;
+      const stale = locationAge > STALE_MS;
       if (stale !== peer.stale) { peer.stale = stale; changed = true; }
-      if (age > DROP_MS) { ride.peers.delete(id); changed = true; }
+      if (presenceAge > DROP_MS) { ride.peers.delete(id); changed = true; }
     }
     if (changed) emitPeers();
-  }, 4000);
+  };
+
+  const syncCadence = () => {
+    clearInterval(ride._tick);
+    clearInterval(ride._sweep);
+    const visible = document.visibilityState === 'visible';
+    ride._tick = setInterval(tick, visible ? TICK_MS : HIDDEN_HEARTBEAT_MS);
+    ride._sweep = setInterval(sweep, visible ? 10000 : HIDDEN_SWEEP_MS);
+  };
+  ride._visibilityHandler = syncCadence;
+  document.addEventListener('visibilitychange', syncCadence);
+  syncCadence();
 }
 
 export function leaveRide({ broadcast = true, silent = false } = {}) {
@@ -595,9 +642,14 @@ export function leaveRide({ broadcast = true, silent = false } = {}) {
   clearInterval(ride._tick);
   clearInterval(ride._sweep);
   clearInterval(ride._demoTimer);
+  if (ride._visibilityHandler) document.removeEventListener('visibilitychange', ride._visibilityHandler);
+  ride._visibilityHandler = null;
   ride._tick = null;
   ride._sweep = null;
   ride._demoTimer = null;
+  ride._lastPub = 0;
+  ride._lastPresence = 0;
+  ride._lastPos = null;
 
   stopClient();
   try { ride._channel?.close(); } catch { /* noop */ }
