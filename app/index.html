@@ -29,9 +29,9 @@
   default-src 'self';
   script-src 'self';
   style-src 'self' 'unsafe-inline';
-  img-src 'self' data: blob: https://tiles.openfreemap.org https://*.basemaps.cartocdn.com https://*.tile.openstreetmap.org https://server.arcgisonline.com https://*.arcgisonline.com;
+  img-src 'self' data: blob: https://api.tomtom.com https://tiles.openfreemap.org https://*.basemaps.cartocdn.com https://*.tile.openstreetmap.org https://server.arcgisonline.com https://*.arcgisonline.com;
   font-src 'self';
-  connect-src 'self' https://tiles.openfreemap.org https://*.basemaps.cartocdn.com https://server.arcgisonline.com https://*.arcgisonline.com https://router.project-osrm.org https://nominatim.openstreetmap.org https://overpass-api.de wss://broker.emqx.io https://broker.emqx.io;
+  connect-src 'self' https://api.tomtom.com https://tiles.openfreemap.org https://*.basemaps.cartocdn.com https://server.arcgisonline.com https://*.arcgisonline.com https://router.project-osrm.org https://valhalla1.openstreetmap.de https://nominatim.openstreetmap.org https://overpass-api.de https://energy.thecore.in wss://broker.emqx.io https://broker.emqx.io wss://broker.hivemq.com wss://mqtt.eclipseprojects.io wss://test.mosquitto.org;
   worker-src 'self' blob:;
   child-src 'self' blob:;
   manifest-src 'self';
@@ -309,7 +309,13 @@
         <!-- Top overlay stack -->
         <div class="map-top" id="mapTop">
           <div class="gap-banner" id="gapBanner" hidden>
-            <span class="gap-ico">⚠️</span>
+            <span class="gap-ico" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" focusable="false">
+                <path d="M10.3 4.2 2.7 17.4A2 2 0 0 0 4.4 20.4h15.2a2 2 0 0 0 1.7-3L13.7 4.2a2 2 0 0 0-3.4 0Z"></path>
+                <path d="M12 9.2v4.2"></path>
+                <circle cx="12" cy="16.8" r=".9" fill="currentColor" stroke="none"></circle>
+              </svg>
+            </span>
             <div class="gap-text">
               <b id="gapTitle">Rider behind</b>
               <span id="gapSub">500 m+ gap</span>
@@ -318,7 +324,12 @@
           </div>
 
           <div class="nav-banner" id="navBanner" hidden>
-            <div class="nav-maneuver" id="navIcon">⬆️</div>
+            <div class="nav-maneuver" id="navIcon" aria-hidden="true">
+              <svg class="nav-arrow" viewBox="0 0 48 48" focusable="false" aria-hidden="true">
+                <circle class="nav-arrow-disc" cx="24" cy="24" r="22.5"></circle>
+                <path class="nav-arrow-body" d="M24 7.4c.9 0 1.7.5 2.2 1.3l10.1 16.9c.8 1.3-.8 2.8-2.1 2l-10.2-6.1-10.2 6.1c-1.3.8-2.9-.7-2.1-2L21.8 8.7c.5-.8 1.3-1.3 2.2-1.3Z"></path>
+              </svg>
+            </div>
             <div class="nav-copy">
               <b id="navPrimary">Continue</b>
               <span id="navSub">—</span>
@@ -339,22 +350,32 @@
               <button class="sb-clear" id="destClear" aria-label="Clear destination" hidden>✕</button>
               <button class="sb-mic" id="micBtn" aria-label="Search by voice">🎙</button>
             </div>
-            <div class="stops-strip" id="stopsStrip" hidden></div>
-            <div class="sb-actions">
-              <button class="chip" id="addStopBtn">＋ Stop</button>
-              <button class="chip" id="routeBtn">Route</button>
+            <div class="mode-row" id="modeRow" role="group" aria-label="Travel mode">
+              <button class="mode-btn active" type="button" data-mode="bike">🏍 Bike</button>
+              <button class="mode-btn" type="button" data-mode="car">🚗 Car</button>
+              <button class="mode-btn" type="button" data-mode="walk">🚶 Walk</button>
             </div>
+            <button class="btn primary lg sb-go" id="directionsBtn" type="button">Directions</button>
             <div class="ac" id="acList" hidden></div>
           </div>
 
-          <div class="layer-strip" id="layerStrip">
-            <button class="pill active" data-layer="streets">Streets</button>
-            <button class="pill" data-layer="dark">Night</button>
-            <button class="pill" data-layer="satellite">Satellite</button>
-            <button class="pill" data-layer="terrain">Terrain</button>
-            <button class="pill sep" id="poiFuel">⛽ Fuel</button>
-            <button class="pill" id="poiFood">🍽 Food</button>
-            <button class="pill" id="poiRepair">🔧 Repair</button>
+          <div class="layer-strip" id="layerStrip" role="group" aria-label="Map layers">
+            <button class="pill" type="button" id="trafficPill" aria-pressed="false">
+              <svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+                <rect x="7" y="2.6" width="10" height="18.8" rx="3.2"></rect>
+                <circle cx="12" cy="7" r="1.15" fill="currentColor" stroke="none"></circle>
+                <circle cx="12" cy="12" r="1.15" fill="currentColor" stroke="none"></circle>
+                <circle cx="12" cy="17" r="1.15" fill="currentColor" stroke="none"></circle>
+              </svg>
+              Live Traffic
+            </button>
+            <button class="pill" type="button" id="satellitePill" aria-pressed="false">
+              <svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+                <circle cx="12" cy="12" r="4"></circle>
+                <ellipse cx="12" cy="12" rx="9.4" ry="4.1" transform="rotate(-28 12 12)"></ellipse>
+              </svg>
+              Satellite
+            </button>
           </div>
         </div>
 
@@ -365,7 +386,13 @@
           <button class="fab" id="fabZoomOut" aria-label="Zoom out">－</button>
           <button class="fab" id="fabPitch" aria-label="Toggle 3D view">3D</button>
           <button class="fab" id="fabGroup" aria-label="Start a group ride">
-            <span>👥</span><i class="fab-badge" id="fabGroupBadge" hidden>0</i>
+            <svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+              <circle cx="9" cy="8" r="3.2"></circle>
+              <path d="M3.5 19a5.5 5.5 0 0 1 11 0"></path>
+              <path d="M15.5 5.6a3.2 3.2 0 0 1 0 5.9"></path>
+              <path d="M17 14.6a5.5 5.5 0 0 1 3.5 4.4"></path>
+            </svg>
+            <i class="fab-badge" id="fabGroupBadge" hidden>0</i>
           </button>
         </div>
 
@@ -378,8 +405,22 @@
               <span id="navMeta">-- km • --</span>
             </button>
             <div class="nav-bottom-actions">
-              <button class="btn round ghost-dark" id="navGroupBtn" aria-label="Group">👥<i class="btn-badge" id="navGroupBadge" hidden>0</i></button>
-              <button class="btn round ghost-dark" id="navVoiceBtn" aria-label="Mute voice guidance">🔊</button>
+              <button class="btn round ghost-dark" id="navGroupBtn" aria-label="Group">
+                <svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+                  <circle cx="9" cy="8" r="3.2"></circle>
+                  <path d="M3.5 19a5.5 5.5 0 0 1 11 0"></path>
+                  <path d="M15.5 5.6a3.2 3.2 0 0 1 0 5.9"></path>
+                  <path d="M17 14.6a5.5 5.5 0 0 1 3.5 4.4"></path>
+                </svg>
+                <i class="btn-badge" id="navGroupBadge" hidden>0</i>
+              </button>
+              <button class="btn round ghost-dark" id="navVoiceBtn" aria-label="Mute voice guidance" aria-pressed="true">
+                <svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+                  <path d="M4 9.5v5h3.6L12 19V5L7.6 9.5Z"></path>
+                  <path d="M15.4 8.6a5 5 0 0 1 0 6.8"></path>
+                  <path d="M18 6a8.6 8.6 0 0 1 0 12"></path>
+                </svg>
+              </button>
               <button class="btn round danger" id="navExitBtn">End</button>
             </div>
           </div>
@@ -391,14 +432,15 @@
             <div>
               <div class="rs-eta"><b id="rsEta">-- min</b><span id="rsDist">-- km</span></div>
               <div class="rs-sub" id="rsSub">Fastest route</div>
-              <div class="rs-note" id="rsNote">Estimates include fuel; tolls are indicative.</div>
+              <div class="rs-note" id="rsNote">Estimates use your own mileage where available.</div>
             </div>
             <div class="rs-actions">
-              <button class="btn primary" id="rsStartBtn">Start</button>
-              <button class="btn ghost icon" id="rsStepsBtn" aria-label="Directions list">≡</button>
-              <button class="btn ghost icon" id="rsClearBtn" aria-label="Clear route">✕</button>
+              <button class="btn ghost icon" id="rsStepsBtn" aria-label="Turn-by-turn list">≡</button>
+              <button class="btn ghost icon" id="rsClearBtn" aria-label="Close directions">✕</button>
             </div>
           </div>
+          <div class="mode-etas" id="modeEtas" hidden></div>
+          <div class="rs-cost" id="rsCost" hidden></div>
           <div class="alts" id="alts" hidden></div>
         </div>
 
@@ -406,7 +448,8 @@
         <div class="group-bar" id="groupBar" hidden>
           <button class="gb-btn" id="gbShare">Invite</button>
           <div class="gb-riders" id="gbRiders"></div>
-          <button class="gb-btn" id="gbMe">My status</button>
+          <button class="gb-btn" id="gbChat" aria-label="Pack messages">💬<i class="btn-badge" id="gbChatBadge" hidden>0</i></button>
+          <button class="gb-btn" id="gbMe">Status</button>
         </div>
       </div>
     </section>
@@ -464,6 +507,31 @@
       </div>
 
       <div class="card">
+        <div class="card-title">Ride settings</div>
+        <div class="setting-row">
+          <div>
+            <b>Voice navigation</b>
+            <span class="li-s">Spoken turn prompts. Muted stays muted after you sign in again.</span>
+          </div>
+          <button class="switch" id="voiceToggle" type="button" role="switch" aria-checked="true" aria-label="Voice navigation"><i></i></button>
+        </div>
+        <div class="setting-row">
+          <div>
+            <b>Live traffic</b>
+            <span class="li-s">TomTom flow overlay. Free key, stored on this device.</span>
+          </div>
+          <button class="chip" id="trafficSetupBtn" type="button">Set up</button>
+        </div>
+        <div class="setting-row">
+          <div>
+            <b>Ride sync</b>
+            <span class="li-s" id="syncTransportSub">Public broker · auto</span>
+          </div>
+          <button class="chip" id="syncTestBtn" type="button">Run test</button>
+        </div>
+      </div>
+
+      <div class="card">
         <div class="card-title">About</div>
         <p class="card-sub">
           ApexMile is a progressive web app. Add it to your Home Screen for full-screen use.
@@ -487,7 +555,7 @@
           <p><b>When you join a group ride.</b> While a ride room is open, your display name, status (riding normal, fuel stop, SOS), live position and course are published to a public MQTT broker so other riders in the room can see you. Room codes are short and the broker is unauthenticated: anyone who knows or guesses the code can subscribe. Phone browsers pause location updates when the app is backgrounded or the screen is off — other riders will see a “not updating” state until you return.</p>
           <p><b>What we deliberately do not send.</b> We do not send your phone number, your saved vehicles, your fill-up history or your photos in ride telemetry.</p>
           <p><b>How to stop sharing.</b> End the ride, or close the tab. Share only while the ride is live; ending a ride removes you from the room and publishes a leave message.</p>
-          <p><b>Maps and routing.</b> Vector map tiles come from OpenFreeMap, satellite imagery from Esri, routing from OSRM, search from Nominatim, and nearby-place search from Overpass. Those requests include the coordinates or search terms you type.</p>
+          <p><b>Maps and routing.</b> Vector map tiles come from OpenFreeMap, satellite imagery from Esri, routing from OSRM, search from Nominatim, and toll detection from Overpass. Those requests include the coordinates or search terms you type. If you enable Live Traffic, your own TomTom key is kept in this browser’s storage and sent only to TomTom with the traffic tile requests.</p>
           <p><b>Deleting your data.</b> Garage → sign out clears the account but keeps logs. To erase everything, clear site data for this app in your browser settings.</p>
         </div>
       </div>
@@ -587,6 +655,7 @@
 <template id="tpl-prices">
   <form class="form" id="priceForm">
     <p class="hint" id="priceHint">Rates for your district. Update them from the pump board if they drift.</p>
+    <button class="link-btn" id="priceUseLive" type="button">Use today's district rate</button>
     <label class="field"><span>91 octane (₹/L)</span><input name="p91" type="number" step="0.01" required /></label>
     <label class="field"><span>95 octane (₹/L)</span><input name="p95" type="number" step="0.01" required /></label>
     <label class="field"><span>100 octane (₹/L)</span><input name="p100" type="number" step="0.01" required /></label>
@@ -635,33 +704,27 @@
   </div>
 </template>
 
-<template id="tpl-rider">
-  <div class="form" id="riderBody"></div>
-</template>
-
 <template id="tpl-status">
   <div class="form">
     <div class="status-grid" id="statusGrid"></div>
   </div>
 </template>
 
-<template id="tpl-stops">
-  <form class="form" id="stopsForm">
-    <div class="row gap8">
-      <input name="stop" type="text" class="grow" placeholder="Add a stop" autocomplete="off" enterkeyhint="done" />
-      <button type="submit" class="btn primary sm">Add</button>
-    </div>
-    <select name="pos" class="select slim">
-      <option value="before_dest">Before destination</option>
-      <option value="first_start">As first stop</option>
-      <option value="last_dest">As final destination</option>
-    </select>
-    <div class="stop-list" id="stopList"></div>
+<template id="tpl-pack">
+  <div class="form">
+    <div class="pack-list" id="packList"></div>
+    <div class="quick-grid" id="quickGrid"></div>
+    <div class="msg-log" id="msgLog"></div>
+    <form class="msg-form" id="msgForm">
+      <input name="msg" type="text" maxlength="160" autocomplete="off"
+             enterkeyhint="send" placeholder="Message the pack" />
+      <button class="btn primary sm" type="submit">Send</button>
+    </form>
     <div class="sheet-actions">
-      <button type="button" class="btn ghost" id="clearStopsBtn">Clear stops</button>
-      <button type="button" class="btn primary" id="stopsDoneBtn">Done</button>
+      <button type="button" class="btn ghost" id="packStatusBtn">My status</button>
+      <button type="button" class="btn primary" id="packInviteBtn">Invite</button>
     </div>
-  </form>
+  </div>
 </template>
 
 <template id="tpl-steps">

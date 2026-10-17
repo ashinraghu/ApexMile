@@ -454,6 +454,9 @@ b{ font-weight:800; }
 .oct.active{ background:var(--accent-soft); border-color:var(--accent); }
 .price-foot{ margin-top:11px; font-size:10.5px; color:var(--text-3); line-height:1.5; }
 
+.price-foot-row{ display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap; color:var(--text-2); font-weight:600; }
+.price-foot-actions{ display:inline-flex; gap:10px; flex:0 0 auto; }
+
 /* ==========================================================================
    Refuel
    ========================================================================== */
@@ -480,6 +483,128 @@ b{ font-weight:800; }
 .row-item .li-v{ font-size:14px; font-weight:900; text-align:right; white-space:nowrap; }
 .row-item .li-del{ width:30px; height:30px; border-radius:8px; color:var(--red); font-size:15px; flex:none; display:grid; place-items:center; }
 .empty{ padding:14px 6px; text-align:center; font-size:12px; color:var(--text-3); line-height:1.6; }
+
+/* Garage rows: a vehicle photo is a thumbnail, never a hero image. Without a
+   fixed box, an uploaded camera photo renders at its intrinsic size and pushes
+   the row apart. */
+.veh-row{ align-items:center; gap:11px; }
+.veh-avatar{
+  width:46px; height:46px; flex:none; overflow:hidden;
+  border-radius:13px; border:1px solid var(--line);
+  background:var(--bg-elev); display:grid; place-items:center;
+  font-size:22px; line-height:1;
+}
+.veh-avatar img{ display:block; width:100%; height:100%; max-width:100%; max-height:100%; object-fit:cover; }
+.veh-row .li-main{ flex:1 1 auto; min-width:0; }
+.veh-row .li-t{ overflow-wrap:anywhere; }
+.veh-row > .row{ flex:0 0 auto; }
+
+/* Form grids: inputs in the same row keep the same baseline even when one is a
+   file picker or a select. */
+.grid2{ align-items:start; }
+.grid2 > *{ min-width:0; }
+.grid2 > .field{ margin-bottom:12px; }
+.field input[type="file"]{
+  height:auto; min-height:48px; padding:9px 10px;
+  font-size:12.5px; line-height:1.5;
+}
+.field input[type="file"]::file-selector-button{
+  margin-right:8px; padding:8px 10px; border:0; border-radius:9px;
+  background:var(--bg-sunk); color:var(--text); font:inherit; font-weight:800;
+}
+
+/* Settings toggle (voice, etc.) */
+.setting-row{
+  display:flex; align-items:center; justify-content:space-between; gap:14px;
+  padding:13px 2px; border-top:1px solid var(--line);
+}
+.setting-row:first-of-type{ border-top:0; }
+.setting-row b{ display:block; font-size:13.5px; }
+.setting-row .li-s{ display:block; margin-top:2px; }
+.switch{
+  width:50px; height:30px; border-radius:999px; flex:none; position:relative;
+  background:var(--line-strong); transition:background .18s var(--ease);
+}
+.switch i{
+  position:absolute; top:3px; left:3px; width:24px; height:24px; border-radius:50%;
+  background:#fff; box-shadow:0 1px 3px rgba(0,0,0,.3); transition:transform .18s var(--ease);
+}
+.switch[aria-checked="true"]{ background:var(--green); }
+.switch[aria-checked="true"] i{ transform:translateX(20px); }
+.switch:focus-visible{ outline:3px solid var(--accent-soft); outline-offset:2px; }
+
+/* Travel-mode segment inside the radar search box */
+.mode-row{ display:flex; gap:6px; padding:0 10px 8px; }
+.mode-btn{
+  flex:1; min-height:36px; border-radius:10px; padding:0 6px;
+  display:flex; align-items:center; justify-content:center; gap:5px;
+  background:var(--bg-sunk); color:var(--text-2);
+  font-size:12px; font-weight:800; white-space:nowrap;
+}
+.mode-btn.active{
+  background:var(--accent-soft); color:var(--accent);
+  box-shadow:inset 0 0 0 1.5px var(--accent);
+}
+.sb-go{ margin:0 10px 10px; width:calc(100% - 20px); justify-content:center; }
+.sb-go.ready{ background:var(--green); }
+
+/* Route sheet: comparable mode ETAs + cost breakdown */
+.mode-etas{ display:flex; gap:6px; margin-top:10px; }
+.mode-eta{
+  flex:1; min-height:44px; padding:6px 4px; border-radius:11px;
+  background:var(--bg-sunk); border:1.5px solid transparent;
+  display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1px;
+  font-size:10px; font-weight:800; color:var(--text-3); text-transform:uppercase; letter-spacing:.04em;
+}
+.mode-eta b{ font-size:13px; color:var(--text); text-transform:none; letter-spacing:0; }
+.mode-eta.active{ border-color:var(--blue); background:var(--blue-soft); color:var(--blue); }
+.mode-eta.active b{ color:var(--blue); }
+.rs-cost{
+  margin-top:10px; padding-top:9px; border-top:1px solid var(--line);
+  display:flex; flex-direction:column; gap:3px;
+}
+.rs-cost-row{ display:flex; justify-content:space-between; gap:10px; font-size:11.5px; color:var(--text-2); font-weight:700; }
+.rs-cost-row b{ color:var(--text); font-weight:900; }
+.rs-cost-row.total{ margin-top:3px; font-size:12.5px; }
+.rs-cost-row.total b{ font-size:14px; }
+.rs-cost-row .fine{ font-size:10px; color:var(--text-3); font-weight:600; }
+
+/* Group room: messages + quick replies */
+.pack-list{ display:flex; flex-direction:column; gap:6px; margin:2px 0 12px; }
+.pack-rider{
+  display:flex; align-items:center; gap:10px; padding:8px 9px;
+  border-radius:12px; background:var(--bg-sunk);
+}
+.pack-rider .dot-av{
+  width:34px; height:34px; border-radius:50%; flex:none; display:grid; place-items:center;
+  color:#fff; font-weight:900; font-size:14px;
+}
+.pack-rider .mid{ flex:1; min-width:0; }
+.pack-rider .mid b{ display:block; font-size:13px; }
+.pack-rider .mid span{ display:block; font-size:10.5px; color:var(--text-3); }
+.pack-rider .meta{ text-align:right; font-size:10.5px; color:var(--text-3); font-weight:800; }
+.quick-grid{ display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+.quick-msg{
+  min-height:42px; padding:8px 10px; border-radius:11px; text-align:left;
+  background:var(--bg-sunk); font-size:12px; font-weight:800; color:var(--text);
+}
+.quick-msg:active{ background:var(--accent-soft); }
+.msg-log{ display:flex; flex-direction:column; gap:6px; max-height:34vh; overflow-y:auto; margin:12px 0 4px; }
+.msg{
+  max-width:86%; padding:8px 11px; border-radius:13px;
+  background:var(--bg-sunk); font-size:12.5px; line-height:1.4;
+}
+.msg.me{ align-self:flex-end; background:var(--blue-soft); }
+.msg small{ display:block; margin-top:2px; font-size:9.5px; color:var(--text-3); font-weight:700; }
+.msg-empty{ text-align:center; font-size:11.5px; color:var(--text-3); padding:10px 0; }
+.msg-form{ display:flex; gap:6px; margin-top:8px; }
+.msg-form input{
+  flex:1; min-width:0; height:44px; padding:0 12px; border-radius:11px;
+  border:1.5px solid var(--line-strong); background:var(--bg); color:var(--text);
+  font-size:15px; font-weight:600;
+}
+.msg-form input:focus{ outline:none; border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft); }
+
 
 /* ==========================================================================
    Radar — the map tab
@@ -533,7 +658,8 @@ body.navigating .maplibregl-ctrl-bottom-right{ bottom:104px; }
   animation:bannerin .3s var(--ease-out);
 }
 @keyframes bannerin{ from{ opacity:0; transform:translateY(-10px) scale(.98);} to{ opacity:1; transform:none;} }
-.gap-ico{ font-size:19px; }
+.gap-ico{ width:19px; height:19px; flex:none; display:grid; place-items:center; }
+.gap-ico svg{ width:19px; height:19px; display:block; }
 .gap-text{ flex:1; min-width:0; line-height:1.3; }
 .gap-text b{ display:block; font-size:12.5px; font-weight:900; }
 .gap-text span{ font-size:10.5px; opacity:.9; }
@@ -546,7 +672,22 @@ body.navigating .maplibregl-ctrl-bottom-right{ bottom:104px; }
   color:#fff; box-shadow:var(--shadow-3);
   animation:bannerin .3s var(--ease-out);
 }
-.nav-maneuver{ font-size:27px; line-height:1; width:44px; text-align:center; }
+/* The manoeuvre arrow is a real vector, rotated in screen space. It points at
+   the direction the rider must take after the upcoming manoeuvre, so a left
+   turn visibly swings left instead of showing a generic up-arrow. */
+.nav-maneuver{
+  width:46px; height:46px; flex:none; line-height:1;
+  display:grid; place-items:center;
+  transition:transform .45s cubic-bezier(.22,1,.36,1);
+  will-change:transform;
+  transform-origin:50% 50%;
+}
+.nav-maneuver.straight .nav-arrow-body{ fill:#FFFFFF; }
+.nav-maneuver.arriving{ transition:none; }
+.nav-maneuver.arriving .nav-arrow-body{ fill:#FDE68A; }
+.nav-arrow{ width:46px; height:46px; display:block; overflow:visible; }
+.nav-arrow-disc{ fill:rgba(255,255,255,.16); stroke:rgba(255,255,255,.38); stroke-width:1.4; }
+.nav-arrow-body{ fill:#fff; }
 .nav-copy{ flex:1; min-width:0; }
 .nav-copy b{ display:block; font-size:15.5px; font-weight:900; line-height:1.2; }
 .nav-copy span{ display:block; font-size:11.5px; opacity:.85; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -580,18 +721,7 @@ body.navigating .maplibregl-ctrl-bottom-right{ bottom:104px; }
   background:var(--bg-sunk);
 }
 .sb-mic{ background:transparent; }
-.sb-actions{ display:flex; gap:6px; padding:0 10px 10px; }
-.sb-actions .chip{ flex:1; min-height:34px; justify-content:center; }
-.sb-actions .chip:last-child{ background:var(--accent); color:#fff; }
 
-.stops-strip{ display:flex; gap:6px; overflow-x:auto; padding:0 12px 8px; scrollbar-width:none; }
-.stops-strip::-webkit-scrollbar{ display:none; }
-.stop-chip{
-  display:inline-flex; align-items:center; gap:6px; flex:none;
-  padding:5px 10px; border-radius:var(--r-pill);
-  background:var(--blue-soft); color:var(--blue); font-size:11.5px; font-weight:800;
-}
-.stop-chip i{ font-style:normal; opacity:.7; }
 
 /* autocomplete */
 .ac{
@@ -622,12 +752,15 @@ body.navigating .maplibregl-ctrl-bottom-right{ bottom:104px; }
 .layer-strip::-webkit-scrollbar{ display:none; }
 .pill{
   flex:none; min-height:32px; padding:0 12px; border-radius:var(--r-pill);
+  display:inline-flex; align-items:center; gap:6px;
   background:var(--glass-strong); border:1px solid var(--line);
   font-size:11.5px; font-weight:800; color:var(--text-2);
   box-shadow:var(--shadow-1); backdrop-filter:blur(12px);
 }
+.pill-ico{ width:14px; height:14px; flex:none; }
 .pill.active{ background:var(--text); color:var(--bg); border-color:var(--text); }
-.pill.sep{ margin-left:6px; }
+/* No traffic key yet — the pill still explains itself instead of disappearing. */
+.pill.needs-key{ border-style:dashed; }
 
 /* fabs */
 .map-fabs{
@@ -646,6 +779,8 @@ body.navigating .maplibregl-ctrl-bottom-right{ bottom:104px; }
   -webkit-backdrop-filter:blur(14px) saturate(180%);
   transition:transform .14s var(--ease), background .2s, color .2s;
 }
+/* The group FAB is 44px; keep its drawn icon centred under the count badge. */
+.fab .glyph{ width:19px; height:19px; display:block; margin:auto; }
 .fab:active{ transform:scale(.92); }
 .fab.on{ background:var(--blue); color:#fff; border-color:transparent; }
 body.in-ride .map-fabs{ bottom:calc(16px + 58px); }
@@ -673,7 +808,7 @@ body.navigating.has-sheet .map-fabs{ bottom:calc(96px + 180px); }
 .rs-eta b{ font-size:24px; font-weight:900; color:var(--green); letter-spacing:-.03em; }
 .rs-eta span{ font-size:13px; font-weight:800; color:var(--text-2); }
 .rs-sub{ font-size:11.5px; font-weight:700; color:var(--text-2); margin-top:3px; }
-.rs-note{ font-size:10px; color:var(--text-3); margin-top:3px; max-width:200px; line-height:1.4; }
+.rs-note{ font-size:10px; color:var(--text-3); margin-top:3px; max-width:220px; line-height:1.4; }
 .rs-actions{ display:flex; gap:6px; align-items:center; flex:none; }
 .alts{ display:flex; gap:6px; overflow-x:auto; margin-top:11px; padding-top:10px; border-top:1px solid var(--line); scrollbar-width:none; }
 .alts::-webkit-scrollbar{ display:none; }
@@ -695,9 +830,11 @@ body.navigating.has-sheet .map-fabs{ bottom:calc(96px + 180px); }
   backdrop-filter:blur(20px) saturate(180%);
 }
 .gb-btn{
-  flex:none; min-height:38px; padding:0 14px; border-radius:var(--r-pill);
+  position:relative; flex:none; min-height:38px; padding:0 13px; border-radius:var(--r-pill);
   background:var(--bg-sunk); font-size:12px; font-weight:800;
 }
+#gbChat{ padding:0 11px; font-size:14px; }
+#gbChat .btn-badge{ top:-3px; right:-3px; }
 .gb-btn:first-child{ background:var(--accent); color:#fff; }
 .gb-riders{ flex:1; display:flex; gap:7px; align-items:center; overflow-x:auto; scrollbar-width:none; }
 .gb-riders::-webkit-scrollbar{ display:none; }
@@ -743,6 +880,7 @@ body.navigating.has-sheet .map-fabs{ bottom:calc(96px + 180px); }
 .nav-eta b{ font-size:22px; font-weight:900; color:var(--green); letter-spacing:-.03em; line-height:1.05; }
 .nav-eta span{ font-size:11.5px; font-weight:700; color:var(--text-2); margin-top:2px; }
 .nav-bottom-actions{ display:flex; gap:7px; align-items:center; }
+.nav-bottom-actions .btn.round .glyph{ width:19px; height:19px; display:block; margin:auto; }
 
 /* hidden chrome during navigation */
 body.navigating .searchbox,
@@ -753,16 +891,129 @@ body.navigating .nav-banner{ display:flex; }
 body.navigating .nav-bottom{ display:block; }
 
 /* ==========================================================================
+   Navigation is a different surface: the app chrome disappears and the map
+   owns the whole screen, in portrait and in landscape. Safe-area padding is
+   applied to the controls, never to the map itself.
+   ========================================================================== */
+html.navigating,
+html.navigating body{
+  height:100%;
+  overflow:hidden;
+  overscroll-behavior:none;
+}
+body.navigating{ background:#0B1220; }
+body.navigating .topbar,
+body.navigating .tabbar,
+body.navigating .install-hint{ display:none !important; }
+body.navigating .stage{ padding:0 !important; }
+body.navigating .tab-map{
+  position:fixed;
+  top:0; right:0; bottom:0; left:0;
+  width:100vw; height:100vh; height:100dvh;
+  max-width:none; margin:0; padding:0;
+  z-index:120;
+}
+body.navigating .map-wrap{ top:0; bottom:0; }
+/* Override the landscape radar panel width: during guidance the banner spans
+   the screen instead of being boxed into the 46vw search-panel column. */
+body.navigating .map-top{
+  width:auto; max-width:none;
+  padding-top:calc(var(--safe-t) + 8px);
+}
+body.navigating .nav-bottom{
+  bottom:calc(var(--safe-b) + 8px);
+  margin-bottom:0;
+  padding-bottom:11px;
+}
+/* Toasts sit at the hidden topbar's height everywhere else; in guidance they
+   would land on top of the instruction banner. */
+body.navigating .toasts{ top:calc(var(--safe-t) + 96px); }
+body.navigating .map-fabs{ bottom:calc(var(--safe-b) + 124px); }
+/* Attribution is required by the tile licences, so it moves above the card
+   instead of being hidden with the rest of the chrome. */
+body.navigating .maplibregl-ctrl-bottom-right{
+  left:calc(var(--safe-l) + 6px); right:auto;
+  bottom:calc(var(--safe-b) + 118px);
+}
+
+/* During guidance the gestures do the work; only keep the two fabs that matter. */
+body.navigating #fabZoomIn,
+body.navigating #fabZoomOut,
+body.navigating #fabPitch{ display:none; }
+
+@media (orientation:landscape){
+  body.navigating .nav-banner{
+    max-width:min(640px, calc(100vw - var(--safe-l) - var(--safe-r) - 20px));
+  }
+  body.navigating .nav-copy b{ font-size:15px; }
+  body.navigating .nav-bottom{
+    left:auto;
+    right:calc(var(--safe-r) + 10px);
+    width:min(380px, 44vw);
+    margin:0;
+    padding:10px 12px 9px;
+  }
+  body.navigating .nav-progress{ margin-bottom:7px; }
+  body.navigating .nav-eta b{ font-size:19px; }
+  body.navigating .nav-bottom-actions{ gap:6px; }
+  body.navigating .nav-bottom-actions .btn.round{ width:40px; height:40px; }
+  body.navigating .nav-bottom-actions .btn.round.danger{ padding:0 14px; }
+  /* Landscape: the map fills the screen, guidance sits on the right, and the
+     floating controls move to the left so nothing overlaps the card. */
+  body.navigating .map-fabs{
+    left:calc(var(--safe-l) + 10px); right:auto;
+    bottom:calc(var(--safe-b) + 46px);
+  }
+  body.navigating .maplibregl-ctrl-bottom-right{
+    left:calc(var(--safe-l) + 6px); right:auto;
+    bottom:calc(var(--safe-b) + 6px);
+  }
+  body.navigating .map-top{ padding-right:calc(var(--safe-r) + 10px); }
+}
+
+/* Short landscape phones (an SE on its side is 375 px tall): drop the secondary
+   line and tighten the card so the map still has room to be read. */
+@media (orientation:landscape) and (max-height:430px){
+  body.navigating .nav-banner{ padding:9px 12px; gap:9px; }
+  body.navigating .nav-maneuver,
+  body.navigating .nav-arrow{ width:40px; height:40px; }
+  body.navigating .nav-copy b{ font-size:14px; }
+  body.navigating .nav-copy span{ display:none; }
+  body.navigating .nav-bottom{ padding:8px 10px 7px; }
+  body.navigating .nav-progress{ margin-bottom:5px; }
+  body.navigating .nav-eta b{ font-size:18px; }
+  body.navigating .nav-bottom-actions .btn.round{ width:38px; height:38px; }
+}
+
+/* ==========================================================================
    Map markers
    ========================================================================== */
 .mk-me{ width:54px; height:54px; position:relative; }
+/* The heading cone must pivot around the puck's centre. Without the explicit
+   origin it rotates around its own middle and slides off to one side, which is
+   exactly what made the arrow look wrong at turns. */
 .mk-me .beam{
   position:absolute; left:50%; bottom:50%; width:0; height:0;
   transform:translateX(-50%);
+  transform-origin:50% 100%;
   border-left:26px solid transparent; border-right:26px solid transparent;
   border-bottom:44px solid rgba(10,108,255,.28);
   filter:blur(1px);
 }
+body.navigating .mk-me .beam{ border-bottom-color:rgba(10,108,255,.42); }
+
+/* Navigation puck: an arrow, not a dot. It rotates with the road heading, so
+   "pointing where I am going" is literally true on screen. */
+.mk-me .arrow{
+  position:absolute; inset:5px; display:none;
+  transform-origin:50% 50%;
+  filter:drop-shadow(0 3px 8px rgba(10,108,255,.55));
+}
+.mk-me .arrow svg{ width:100%; height:100%; display:block; }
+.mk-me .arrow path{ fill:#0A6CFF; stroke:#fff; stroke-width:1.6; stroke-linejoin:round; }
+body.navigating .mk-me .arrow{ display:block; }
+body.navigating .mk-me .beam,
+body.navigating .mk-me .core{ display:none; }
 .mk-me .core{
   position:absolute; left:50%; top:50%; width:20px; height:20px; margin:-10px 0 0 -10px;
   border-radius:50%; background:#0A6CFF; border:3px solid #fff;
@@ -803,25 +1054,11 @@ body.navigating .nav-bottom{ display:block; }
   color:#0F172A; font-size:11px; font-weight:900; display:grid; place-items:center;
   box-shadow:0 3px 8px rgba(0,0,0,.3);
 }
-.mk-poi{
-  width:30px; height:30px; border-radius:10px; display:grid; place-items:center;
-  background:var(--bg-elev); border:1px solid var(--line); font-size:14px;
-  box-shadow:var(--shadow-2); cursor:pointer;
-}
 .maplibregl-popup-content{
   background:var(--bg-elev) !important; color:var(--text) !important;
   border:1px solid var(--line); border-radius:14px !important;
   padding:11px 12px !important; box-shadow:var(--shadow-3) !important;
   font-family:var(--font) !important;
-}
-.apex-popup .maplibregl-popup-tip{ border-top-color:var(--bg-elev) !important; border-bottom-color:var(--bg-elev) !important; }
-.apex-popup .maplibregl-popup-close-button{ color:var(--text-2); font-size:18px; right:4px; top:2px; }
-.pop{ display:flex; flex-direction:column; gap:2px; min-width:130px; }
-.pop b{ font-size:13px; line-height:1.25; }
-.pop span{ font-size:10.5px; color:var(--text-3); }
-.pop-btn{
-  margin-top:7px; padding:7px 10px; border-radius:9px;
-  background:var(--blue); color:#fff; font-size:12px; font-weight:800;
 }
 
 /* ==========================================================================
@@ -890,25 +1127,6 @@ body.navigating .nav-bottom{ display:block; }
 .status-b.sos{ grid-column:span 2; background:var(--red); color:#fff; }
 .status-b.on{ background:var(--green-soft); color:var(--green); }
 
-/* stops */
-.stop-list{ display:flex; flex-direction:column; gap:7px; margin-top:12px; }
-.stop-row{
-  display:flex; align-items:center; gap:9px; padding:9px 11px;
-  border-radius:var(--r-md); background:var(--bg-sunk);
-}
-.stop-num{
-  width:24px; height:24px; border-radius:50%; flex:none;
-  display:grid; place-items:center; background:var(--bg-elev);
-  font-size:11px; font-weight:900; border:1.5px solid var(--line-strong);
-}
-.stop-name{ flex:1; min-width:0; font-size:13px; font-weight:800; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.stop-mv{ display:flex; gap:3px; }
-.stop-mv button{
-  width:28px; height:28px; border-radius:7px; background:var(--bg-elev);
-  font-size:12px; color:var(--text-2); display:grid; place-items:center;
-}
-.stop-mv button:disabled{ opacity:.3; }
-
 /* steps */
 .steps{ display:flex; flex-direction:column; gap:7px; }
 .step{
@@ -916,7 +1134,11 @@ body.navigating .nav-bottom{ display:block; }
   border-radius:var(--r-md); background:var(--bg-sunk);
   font-size:12.5px;
 }
-.step-ico{ font-size:17px; width:24px; text-align:center; flex:none; }
+.step-ico{
+  width:26px; flex:none; display:grid; place-items:center;
+  color:var(--text-2);
+}
+.step-ico .glyph{ width:19px; height:19px; display:block; }
 .step-t{ flex:1; min-width:0; }
 .step-t b{ font-weight:800; }
 .step-d{ font-size:11px; font-weight:800; color:var(--accent); white-space:nowrap; }
@@ -997,8 +1219,7 @@ html[data-motion="reduce"] .maplibregl-canvas{ transition:none !important; }
 /* larger touch targets on coarse pointers */
 @media (pointer:coarse){
   .sb-swap,.sb-clear,.sb-mic{ width:38px; height:38px; }
-  .stop-mv button{ width:34px; height:34px; }
-  /* Pinch is the native zoom gesture on phones; the +/− column just eats map
+    /* Pinch is the native zoom gesture on phones; the +/− column just eats map
      space on short screens. Keep it on desktop. */
   #fabZoomIn,#fabZoomOut{ display:none; }
 }

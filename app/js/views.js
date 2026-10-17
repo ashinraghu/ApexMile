@@ -11,6 +11,7 @@ import {
 import { vehicleStats, scenarioRange, gradeCosts, formatKmpl } from './stats.js';
 import { openVehicleSheet, openOdometerSheet, openPricesSheet, openChainSheet } from './sheets.js';
 import { PRICES_VERIFIED } from './places.js';
+import { priceSourceLabel, refreshFuelPrices } from './prices.js';
 
 /* ------------------------------------------------------------------ home */
 
@@ -92,13 +93,31 @@ export function renderHome() {
 
   const foot = $('#priceFoot');
   if (foot) {
+    const live = state.region.live && !state.region.custom;
     foot.innerHTML = `
       <div class="price-foot-row">
-        <span>${esc(state.region.city)}, ${esc(state.region.state)} · captured ${esc(state.region.verified || PRICES_VERIFIED)}</span>
-        <button class="link-btn" id="priceEditBtn" type="button">Correct rates</button>
+        <span>${esc(state.region.city)}, ${esc(state.region.state)} · ${esc(priceSourceLabel())}</span>
+        <span class="price-foot-actions">
+          <button class="link-btn" id="priceRefreshBtn" type="button">Refresh</button>
+          <button class="link-btn" id="priceEditBtn" type="button">Correct rates</button>
+        </span>
       </div>
-      <div class="fine">Retail petrol is revised daily and varies by pump. These are a starting point, not a live feed.</div>`;
+      <div class="fine">${live
+        ? 'Today\'s district rate, updated every morning. Individual pumps can differ by a few paise — correct it if your board disagrees.'
+        : `Retail petrol is revised daily and varies by pump. Showing the verified baseline of ${esc(state.region.verified || PRICES_VERIFIED)}.`}</div>`;
     $('#priceEditBtn')?.addEventListener('click', openPricesSheet);
+    $('#priceRefreshBtn')?.addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      if (state.region.custom) return toast('Custom rates in use — edit or reset them in Correct rates', { type: 'warn' });
+      btn.disabled = true;
+      btn.textContent = 'Checking…';
+      const row = await refreshFuelPrices({ force: true });
+      toast(row ? `Updated for ${row.name}` : 'Price feed unreachable — keeping current rates', {
+        icon: row ? '⛽' : '📡',
+        type: row ? 'ok' : 'warn',
+      });
+      renderRefuel();
+    });
   }
 
   const regionLabel = $('#priceRegion');
@@ -440,7 +459,7 @@ export function renderGarage() {
     const row = document.createElement('div');
     row.className = `row-item veh-row ${active ? 'active' : ''}`;
     row.innerHTML = `
-      <div class="veh-avatar">${v.photo ? `<img src="${v.photo}" alt="">` : (v.type === 'Car' ? '🚗' : '🏍️')}</div>
+      <div class="veh-avatar">${v.photo ? `<img src="${v.photo}" alt="" loading="lazy" decoding="async">` : (v.type === 'Car' ? '🚗' : '🏍️')}</div>
       <div class="li-main">
         <div class="li-t">${esc(v.name)} ${active ? '<span class="tag">active</span>' : ''}</div>
         <div class="li-s">${v.type} · ${formatKmpl(stats.kmpl)} km/L ${stats.measured ? '(measured)' : '(estimate)'} · ODO ${km(v.odo)}</div>

@@ -2,7 +2,7 @@
 // Owns the map drawing for a planned route; navigation owns it once started.
 import { bus } from './bus.js';
 import { geo, distanceM } from './geo.js';
-import { state, activeVehicle } from './store.js';
+import { state, activeVehicle, save } from './store.js';
 import * as mapCtl from './map.js';
 import { directions, buildRouteMeta } from './routing.js';
 import { vehicleStats } from './stats.js';
@@ -16,10 +16,27 @@ export const journey = {
   stops: [],
   routes: [],
   selected: 0,
-  mode: 'bike',
+  mode: state.tripModeSet ? (state.tripMode || 'bike') : 'bike',
+  userMode: Boolean(state.tripModeSet), // true once the rider picks a mode explicitly
   loading: false,
   error: null,
 };
+
+export const MODES = ['bike', 'car', 'walk'];
+export const MODE_META = {
+  bike: { label: 'Bike', icon: '🏍', kmh: 33 },
+  car: { label: 'Car', icon: '🚗', kmh: 38 },
+  walk: { label: 'Walk', icon: '🚶', kmh: 4.8 },
+};
+
+/** Minutes for any mode, using this route's own duration when it matches. */
+export function modeMinutes(mode, route = currentRoute()) {
+  if (!route) return null;
+  if (route.mode === mode && route.duration) return Math.max(1, Math.round(route.duration / 60));
+  const km = route.distance / 1000;
+  const kmh = MODE_META[mode]?.kmh || 33;
+  return Math.max(1, Math.round((km / kmh) * 60));
+}
 
 export function startPoint() {
   if (journey.origin) return journey.origin;
@@ -33,8 +50,15 @@ export function setOrigin(place) {
   else emit();
 }
 
-export function setMode(mode) {
-  if (journey.mode === mode) return;
+export function setMode(mode, { explicit = true } = {}) {
+  if (!MODES.includes(mode)) return;
+  if (explicit) {
+    journey.userMode = true;
+    state.tripModeSet = true;
+  }
+  state.tripMode = mode;
+  save();
+  if (journey.mode === mode) { emit(); return; }
   journey.mode = mode;
   if (journey.dest) plan({ fit: false });
   else emit();
@@ -177,29 +201,55 @@ export function clearStops() {
 
 /* ------------------------------------------------------------------ estimates */
 
+/** Car trips use the garage's car, bike trips its bike, rather than whichever
+ *  vehicle happens to be selected on the Home tab. */
+function vehicleForMode(mode) {
+  if (mode === 'walk') return null;
+  const wanted = mode === 'car' ? 'Car' : 'Bike';
+  const active = activeVehicle();
+  if (active?.type === wanted) return active;
+  const match = state.vehicles.find((v) => v.type === wanted);
+  return match || active || null;
+}
+
 export function estimates(route = journey.routes[journey.selected]) {
   if (!route) return null;
-  const veh = activeVehicle();
+  const mode = route.mode || journey.mode;
+  const veh = vehicleForMode(mode);
   const stats = vehicleStats(veh);
   const km = route.distance / 1000;
-  const litres = stats.kmpl > 0 ? km / stats.kmpl : 0;
+  const onFoot = mode === 'walk' || !veh;
+  const litres = onFoot || !(stats.kmpl > 0) ? 0 : km / stats.kmpl;
   const fuel = litres * (state.region.prices[state.octane] || 0);
+  const tolls = mode === 'car' ? Number(route.tolls) || 0 : 0;
   const arrival = new Date(Date.now() + route.duration * 1000);
   return {
     km,
     minutes: route.duration / 60,
     litres,
     fuel,
+    tolls,
+    total: fuel + tolls,
+    tollInfo: route.tollInfo || null,
     arrival,
     kmpl: stats.kmpl,
     measured: stats.measured,
     vehicleName: veh?.name || 'your vehicle',
-    mode: journey.mode,
+    vehicleType: veh?.type || '',
+    mode,
   };
 }
 
 function emit(extra = {}) {
   bus.emit('journey:update', { journey, ...extra });
+}
+
+/** Re-emit the current plan without touching the network. Used when guidance
+ *  ends: the rider goes back to the Directions preview with the destination,
+ *  stops, alternatives and cost all still populated. */
+export function refresh() {
+  if (hasRoute()) draw();
+  emit();
 }
 
 export function hasRoute() {

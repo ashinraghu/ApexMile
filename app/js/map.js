@@ -1,7 +1,8 @@
 // MapLibre GL. Vector styles from OpenFreeMap (no API key, ODbL data, proper
-// attribution). Raster "traffic" and satellite tiles are deliberately not used:
-// they need a licensed provider. Drop a MapTiler/Mapbox key in STYLES when you
-// have one and both become a one-line change.
+// attribution), Esri World Imagery for satellite, and TomTom's raster traffic
+// flow as an opt-in overlay. Traffic is the one layer that needs a key: the
+// rider pastes a free TomTom key in the app, it stays in local storage, and it
+// is never committed to this repository.
 import { bus } from './bus.js';
 import { distanceM } from './geo.js';
 
@@ -56,6 +57,9 @@ const mapCtl = {
   preset: 'streets',
   follow: true,
   navigating: false,
+  traffic: false,
+  _trafficKey: '',
+  _trafficWarned: false,
   _meMarker: null,
   _meEl: null,
   _accuracySourceReady: false,
@@ -63,7 +67,6 @@ const mapCtl = {
   _peerMarkers: new Map(),
   _destMarker: null,
   _stopMarkers: [],
-  _poiMarkers: [],
   _route: null,
   _alts: null,
   _routeVisible: false,
@@ -94,7 +97,7 @@ function cartoStyle() {
 
 /* ------------------------------------------------------------------ init */
 
-export function initMap({ center, preset, interactive = true } = {}) {
+export function initMap({ center, preset } = {}) {
   if (mapCtl.map) return mapCtl.map;
 
   if (!maplibregl) {
@@ -146,8 +149,21 @@ export function initMap({ center, preset, interactive = true } = {}) {
   map.once('load', () => clearTimeout(styleGuard));
 
   map.on('error', (e) => {
+    // A rejected TomTom key is a 401/403 on the flow tiles. Silence would leave
+    // the pill lit over a map with no traffic, so surface it once and turn the
+    // overlay off; the key stays in settings for editing.
+    const status = Number(e?.error?.status) || 0;
+    const url = String(e?.error?.url || '');
+    if (mapCtl.traffic && (e?.sourceId === TRAFFIC_SOURCE || /api\.tomtom\.com/.test(url))
+      && (status === 401 || status === 403)) {
+      if (!mapCtl._trafficWarned) {
+        mapCtl._trafficWarned = true;
+        bus.emit('traffic:error', { status });
+      }
+      return;
+    }
     // Tile 404s and offline blips are noise; a style failure is worth handling once.
-    if (e?.error?.status && e.error.status >= 400 && e.error.status < 500) return;
+    if (status >= 400 && status < 500) return;
     if (!mapCtl.ready && /style|sprite|glyph|fetch/i.test(String(e?.error?.message || ''))) {
       useFallbackStyle(map, 'error');
     } else if (!mapCtl._warnedStyle) {
@@ -306,6 +322,83 @@ function ensureLayers() {
   for (const id of ['apex-acc-fill', 'apex-acc-line', 'apex-alts-line', 'apex-route-case', 'apex-route-line', 'apex-route-done-line']) {
     if (map.getLayer(id)) map.moveLayer(id);
   }
+
+  // A style switch wipes every non-style layer, so re-add traffic each time.
+  ensureTraffic();
+}
+
+/* ------------------------------------------------------------------ live traffic */
+
+const TRAFFIC_SOURCE = 'apex-traffic';
+
+function trafficTileUrl(key) {
+  const k = encodeURIComponent(key);
+  // relative0 colour-codes against free-flow speed and stays readable over both
+  // the light basemaps and satellite.
+  return `https://api.tomtom.com/traffic/map/4/tile/flow/relative0/{z}/{x}/{y}.png`
+    + `?key=${k}&tileSize=256&thickness=6`;
+}
+
+function ensureTraffic() {
+  const map = mapCtl.map;
+  if (!map || !mapCtl.ready) return;
+  if (!mapCtl.traffic || !mapCtl._trafficKey) return;
+  if (map.getSource(TRAFFIC_SOURCE)) return;
+  try {
+    map.addSource(TRAFFIC_SOURCE, {
+      type: 'raster',
+      tiles: [trafficTileUrl(mapCtl._trafficKey)],
+      tileSize: 256,
+      maxzoom: 18,
+      attribution: 'Traffic © TomTom',
+    });
+    map.addLayer({
+      id: TRAFFIC_SOURCE,
+      type: 'raster',
+      source: TRAFFIC_SOURCE,
+      paint: { 'raster-opacity': 0.9 },
+    });
+    // Tuck the overlay under the route and accuracy geometry.
+    const under = ['apex-acc-fill', 'apex-acc-line', 'apex-alts-line', 'apex-route-case', 'apex-route-line']
+      .find((id) => map.getLayer(id));
+    if (under) map.moveLayer(TRAFFIC_SOURCE, under);
+  } catch (err) {
+    console.warn('[map] traffic overlay failed', err);
+  }
+}
+
+function removeTraffic() {
+  const map = mapCtl.map;
+  if (!map) return;
+  try { if (map.getLayer(TRAFFIC_SOURCE)) map.removeLayer(TRAFFIC_SOURCE); } catch { /* style swapped */ }
+  try { if (map.getSource(TRAFFIC_SOURCE)) map.removeSource(TRAFFIC_SOURCE); } catch { /* style swapped */ }
+}
+
+/** The key lives in the store, not in the bundle. */
+export function setTrafficKey(key) {
+  const next = String(key || '').trim();
+  if (next === mapCtl._trafficKey) return;
+  mapCtl._trafficKey = next;
+  mapCtl._trafficWarned = false;
+  if (!next) {
+    mapCtl.traffic = false;
+    removeTraffic();
+    return;
+  }
+  if (mapCtl.traffic) {
+    removeTraffic();
+    ensureTraffic();
+  }
+}
+
+/** Turn the flow overlay on/off. Returns false when no key has been set yet. */
+export function setTraffic(on) {
+  if (on && !mapCtl._trafficKey) return false;
+  if (on) mapCtl._trafficWarned = false;
+  mapCtl.traffic = Boolean(on);
+  if (mapCtl.traffic) ensureTraffic();
+  else removeTraffic();
+  return mapCtl.traffic;
 }
 
 /* ------------------------------------------------------------------ me */
@@ -318,7 +411,12 @@ function buildMeElement() {
   beam.className = 'beam';
   const core = document.createElement('div');
   core.className = 'core';
-  el.append(beam, core);
+  // While navigating the puck becomes an arrow that points the way to go, the
+  // same language every navigation app uses. Outside navigation it stays a dot.
+  const arrow = document.createElement('div');
+  arrow.className = 'arrow';
+  arrow.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.4 20.2 21l-8.2-4.8L3.8 21Z"></path></svg>';
+  el.append(beam, core, arrow);
   return el;
 }
 
@@ -345,16 +443,23 @@ function scheduleBeam() {
   mapCtl._raf = requestAnimationFrame(() => {
     mapCtl._raf = null;
     applyBeamRotation(mapCtl._meHeading || 0);
+    // The navigation arrow lives in screen space too; let it re-align while
+    // the camera eases through a turn (at most once per frame).
+    bus.emit('map:rotate', currentBearing());
   });
 }
 
 function applyBeamRotation(heading) {
   mapCtl._meHeading = heading;
-  const beam = mapCtl._meEl?.querySelector('.beam');
-  if (!beam || !mapCtl.map) return;
+  if (!mapCtl.map) return;
   const mapBearing = mapCtl.map.getBearing();
-  // The beam always points where the rider is actually heading on screen.
-  beam.style.transform = `translateX(-50%) rotate(${heading - mapBearing}deg)`;
+  const turn = ((heading - mapBearing) % 360 + 360) % 360;
+  // The cone and the navigation arrow always point where the rider is actually
+  // travelling on screen, whatever the camera is doing.
+  const beam = mapCtl._meEl?.querySelector('.beam');
+  if (beam) beam.style.transform = `translateX(-50%) rotate(${turn}deg)`;
+  const arrow = mapCtl._meEl?.querySelector('.arrow');
+  if (arrow) arrow.style.transform = `rotate(${turn}deg)`;
 }
 
 function setAccuracy(pos) {
@@ -557,60 +662,6 @@ export function clearStops() {
   mapCtl._stopMarkers = [];
 }
 
-export function setPois(items = []) {
-  clearPois();
-  const map = mapCtl.map;
-  if (!map || !mapCtl.ready) return;
-  items.forEach((item) => {
-    const el = document.createElement('div');
-    el.className = 'mk-poi';
-    el.textContent = item.emoji || '📍';
-    el.setAttribute('role', 'button');
-    el.setAttribute('aria-label', item.label || 'Place');
-    const marker = new maplibregl.Marker({ element: el, anchor: 'bottom' })
-      .setLngLat([item.lng, item.lat])
-      .addTo(map);
-
-    el.addEventListener('click', (ev) => {
-      ev.stopPropagation();
-      const popup = new maplibregl.Popup({ offset: 16, closeButton: false, className: 'apex-popup' })
-        .setLngLat([item.lng, item.lat])
-        .setDOMContent(buildPopup(item))
-        .addTo(map);
-      const btn = popup.getElement().querySelector('[data-route-here]');
-      btn?.addEventListener('click', () => {
-        popup.remove();
-        bus.emit('poi:pick', item);
-      });
-    });
-
-    mapCtl._poiMarkers.push(marker);
-  });
-}
-
-function buildPopup(item) {
-  const wrap = document.createElement('div');
-  wrap.className = 'pop';
-  const title = document.createElement('b');
-  title.textContent = item.label || 'Place';
-  const sub = document.createElement('span');
-  sub.textContent = item.sub || '';
-  const btn = document.createElement('button');
-  btn.type = 'button';
-  btn.dataset.routeHere = '1';
-  btn.className = 'pop-btn';
-  btn.textContent = 'Route here';
-  wrap.append(title);
-  if (item.sub) wrap.append(sub);
-  wrap.append(btn);
-  return wrap;
-}
-
-export function clearPois() {
-  mapCtl._poiMarkers.forEach((m) => m.remove());
-  mapCtl._poiMarkers = [];
-}
-
 /* ------------------------------------------------------------------ camera */
 
 export function setFollow(on) {
@@ -622,6 +673,19 @@ export function isFollowing() {
   return mapCtl.follow;
 }
 
+/** Current screen rotation of the map, in degrees. The nav arrow uses this so
+ *  it points at the right place on the glass even while the camera eases. */
+export function currentBearing() {
+  const map = mapCtl.map;
+  if (!map) return 0;
+  try {
+    const b = Number(map.getBearing());
+    return Number.isFinite(b) ? ((b % 360) + 360) % 360 : 0;
+  } catch {
+    return 0;
+  }
+}
+
 export function setNavigating(on) {
   mapCtl.navigating = Boolean(on);
   if (on) setFollow(true);
@@ -631,7 +695,7 @@ export function setNavigating(on) {
  * The heart of the "Google Maps" feel: keep the rider slightly below centre,
  * rotate the world so they always travel up-screen, and zoom out as speed rises.
  */
-export function cameraFollow(pos, { heading = null, speed = 0, mode = 'bike' } = {}) {
+export function cameraFollow(pos, { heading = null, speed = 0, mode = 'bike', forceBearing = false } = {}) {
   const map = mapCtl.map;
   if (!map || !mapCtl.ready || !mapCtl.follow) return;
 
@@ -655,7 +719,9 @@ export function cameraFollow(pos, { heading = null, speed = 0, mode = 'bike' } =
 
   if (!walking) {
     opts.pitch = 52;
-    if (heading != null && kmh > 4) opts.bearing = heading;
+    // `forceBearing` lets navigation align the map with the road even at a
+    // standstill, so "up" always means "ahead" from the first frame.
+    if (heading != null && (kmh > 4 || forceBearing)) opts.bearing = heading;
   } else {
     opts.pitch = 0;
     opts.bearing = 0;
@@ -681,18 +747,23 @@ export function recenter(pos, { zoom = 17.2, pitch = 0, bearing = 0, duration = 
   setFollow(true);
 }
 
-export function fitRoute(coords, { paddingBottom = 240 } = {}) {
+export function fitRoute(coords, { paddingBottom = 240, bearing = null, pitch = null } = {}) {
   const map = mapCtl.map;
   if (!map || !mapCtl.ready || !coords?.length) return;
   const bounds = coords.reduce(
     (b, c) => b.extend(c),
     new maplibregl.LngLatBounds(coords[0], coords[0]),
   );
-  map.fitBounds(bounds, {
+  const opts = {
     padding: { top: 130, bottom: paddingBottom, left: 44, right: 44 },
     duration: 700,
     maxZoom: 16,
-  });
+  };
+  // Returning from guidance should read like a plan, not a moving camera:
+  // north up and flat again.
+  if (bearing != null) opts.bearing = bearing;
+  if (pitch != null) opts.pitch = pitch;
+  map.fitBounds(bounds, opts);
   setFollow(false);
 }
 
@@ -720,6 +791,7 @@ export function mapState() {
     ready: mapCtl.ready,
     preset: mapCtl.preset,
     follow: mapCtl.follow,
+    traffic: mapCtl.traffic,
   };
 }
 

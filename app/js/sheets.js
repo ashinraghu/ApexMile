@@ -12,13 +12,12 @@ import {
 import { vehicleStats } from './stats.js';
 import {
   ride, inviteUrl, endRideForAll, leaveRide, joinRide, setMyStatus, pingPeer, peerList,
-  startDemoPeer, normalizeCode, SELF_ID,
+  startDemoPeer, normalizeCode, SELF_ID, sendMessage, markMessagesRead, QUICK_MESSAGES,
 } from './rooms.js';
-import { journey, removeStop, moveStop, clearStops, currentRoute, estimates } from './journey.js';
+import { journey, currentRoute, estimates } from './journey.js';
 import { nav } from './nav.js';
-import { PRICES_VERIFIED } from './places.js';
-import { localSuggest, geocode } from './routing.js';
-import { geo } from './geo.js';
+import { maneuverSvg } from './navicons.js';
+import { priceSourceLabel, refreshFuelPrices } from './prices.js';
 
 const tpl = (id) => document.getElementById(id)?.innerHTML || '';
 
@@ -144,7 +143,20 @@ export function openPricesSheet() {
     mount(body) {
       const form = body.querySelector('#priceForm');
       const hint = body.querySelector('#priceHint');
-      hint.textContent = `Rates for ${state.region.city}, ${state.region.state}. Captured ${state.region.verified || PRICES_VERIFIED} — check the pump board and correct anything that has drifted.`;
+      hint.textContent = `Rates for ${state.region.city}, ${state.region.state} · ${priceSourceLabel()}. Check the pump board and correct anything that has drifted.`;
+      body.querySelector('#priceUseLive')?.addEventListener('click', async (e) => {
+        const btn = e.currentTarget;
+        btn.disabled = true;
+        setRegion({ custom: false, live: false, fetchedAt: '', source: '' });
+        const row = await refreshFuelPrices({ force: true });
+        closeSheet();
+        toast(row ? `Using the ${row.name} district rate` : 'Price feed unreachable — baseline restored', {
+          icon: row ? '⛽' : '📡',
+          type: row ? 'ok' : 'warn',
+        });
+        bus.emit('prices:changed');
+      });
+
       form.elements.p91.value = state.region.prices[91].toFixed(2);
       form.elements.p95.value = state.region.prices[95].toFixed(2);
       form.elements.p100.value = state.region.prices[100].toFixed(2);
@@ -373,7 +385,7 @@ export function openRiderSheet(id) {
       <div class="rider-avatar" style="background:${peer.sos ? '#E02D2D' : peer.color}">${esc(peer.name.charAt(0).toUpperCase())}</div>
       <div>
         <div class="rider-name">${esc(peer.name)}</div>
-        <div class="rider-role">${esc(peer.role)} · ${esc(peer.mode === 'car' ? 'Car' : 'Bike')}</div>
+        <div class="rider-role">${esc(peer.role)} · ${esc(peer.mode === 'car' ? 'Car' : peer.mode === 'walk' ? 'Walk' : 'Bike')}</div>
       </div>
       <span class="live-pill ${peer.stale ? 'stale' : ''}">${peer.stale ? 'Not updating' : 'Live'}</span>
     </div>
@@ -450,122 +462,6 @@ export function openStatusSheet() {
   });
 }
 
-/* ------------------------------------------------------------------ stops */
-
-export function openStopsSheet() {
-  openSheet({
-    title: 'Stops & order',
-    html: tpl('tpl-stops'),
-    mount(body) {
-      const form = body.querySelector('#stopsForm');
-      const list = body.querySelector('#stopList');
-      const input = form.elements.stop;
-
-      const render = () => {
-        list.innerHTML = '';
-        if (journey.origin) {
-          list.append(stopRow({ name: journey.origin.name, index: -2, kind: 'Start' }));
-        }
-        journey.stops.forEach((s, i) => {
-          list.append(stopRow({ ...s, index: i, kind: `Stop ${i + 1}` }));
-        });
-        if (journey.dest) {
-          list.append(stopRow({ name: journey.dest.name, index: -1, kind: 'Destination' }));
-        }
-        if (!journey.dest && !journey.stops.length) {
-          const empty = document.createElement('p');
-          empty.className = 'hint';
-          empty.textContent = 'Pick a destination first, then add stops along the way.';
-          list.append(empty);
-        }
-      };
-
-      const stopRow = ({ name, index, kind }) => {
-        const row = document.createElement('div');
-        row.className = 'stop-row';
-        row.innerHTML = `<span class="stop-num">${index === -2 ? 'A' : index === -1 ? 'B' : index + 1}</span>
-          <span class="stop-name">${esc(kind)}: ${esc(name)}</span>`;
-        if (index >= 0) {
-          const mv = document.createElement('div');
-          mv.className = 'stop-mv';
-          const mk = (label, action, disabled) => {
-            const b = document.createElement('button');
-            b.type = 'button';
-            b.textContent = label;
-            b.disabled = disabled;
-            b.title = action;
-            b.addEventListener('click', async () => {
-              if (action === 'remove') removeStop(index);
-              else moveStop(index, action);
-              setTimeout(render, 60);
-            });
-            return b;
-          };
-          mv.append(
-            mk('↑', 'up', index === 0),
-            mk('↓', 'down', index === journey.stops.length - 1),
-            mk('✕', 'remove', false),
-          );
-          row.append(mv);
-        }
-        return row;
-      };
-
-      // Lightweight local suggestions; tapping one fills the input.
-      const suggestBox = document.createElement('div');
-      suggestBox.className = 'ac';
-      suggestBox.hidden = true;
-      input.closest('.row')?.after(suggestBox);
-
-      input.addEventListener('input', () => {
-        const matches = localSuggest(input.value, geo.pos, 4);
-        suggestBox.innerHTML = '';
-        if (!input.value.trim() || !matches.length) { suggestBox.hidden = true; return; }
-        for (const m of matches) {
-          const b = document.createElement('button');
-          b.type = 'button';
-          b.className = 'ac-item';
-          b.innerHTML = `<span class="ac-ico">📍</span><span class="ac-mid"><span class="ac-t">${esc(m.name)}</span><span class="ac-s">${esc(m.sub)}</span></span><span class="ac-d">${(m.dist / 1000).toFixed(1)} km</span>`;
-          b.addEventListener('click', () => {
-            input.value = m.name;
-            input.dataset.lat = m.lat;
-            input.dataset.lng = m.lng;
-            suggestBox.hidden = true;
-          });
-          suggestBox.append(b);
-        }
-        suggestBox.hidden = false;
-      });
-
-      form.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const q = input.value.trim();
-        if (!q) return;
-        const lat = Number(input.dataset.lat);
-        const lng = Number(input.dataset.lng);
-        const place = Number.isFinite(lat) && Number.isFinite(lng)
-          ? { name: q, lat, lng }
-          : await geocode(q);
-        if (!place) return toast(`Could not find “${q}”`, { type: 'err' });
-        input.value = '';
-        delete input.dataset.lat;
-        delete input.dataset.lng;
-        suggestBox.hidden = true;
-        bus.emit('journey:add-stop', { place, position: form.elements.pos.value });
-        setTimeout(render, 700);
-      });
-
-      body.querySelector('#clearStopsBtn').addEventListener('click', () => {
-        clearStops();
-        setTimeout(render, 700);
-      });
-      body.querySelector('#stopsDoneBtn').addEventListener('click', () => closeSheet());
-
-      render();
-    },
-  });
-}
-
 /* ------------------------------------------------------------------ steps */
 
 export function openStepsSheet() {
@@ -579,7 +475,7 @@ export function openStepsSheet() {
       for (const step of route.steps) {
         const row = document.createElement('div');
         row.className = 'step';
-        row.innerHTML = `<span class="step-ico">${step.icon}</span>
+        row.innerHTML = `<span class="step-ico">${maneuverSvg(step.icon)}</span>
           <span class="step-t">${esc(step.instruction)}</span>
           <span class="step-d">${step.distance > 900 ? `${(step.distance / 1000).toFixed(1)} km` : `${Math.round(step.distance)} m`}</span>`;
         list.append(row);
@@ -594,6 +490,132 @@ export function openStepsSheet() {
         note.textContent = `About ${Math.round(est.minutes)} min and ${est.litres.toFixed(2)} L of fuel (₹${Math.round(est.fuel)}) on ${est.vehicleName}.`;
         list.prepend(note);
       }
+    },
+  });
+}
+
+/* ------------------------------------------------------------------ pack room */
+
+const clock = (ms) => new Date(ms).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' });
+
+export function openPackSheet() {
+  markMessagesRead();
+  openSheet({
+    title: ride.trip || 'Pack',
+    html: tpl('tpl-pack'),
+    mount(body) {
+      const list = body.querySelector('#packList');
+      const log = body.querySelector('#msgLog');
+      const quick = body.querySelector('#quickGrid');
+      const form = body.querySelector('#msgForm');
+
+      const renderList = () => {
+        if (!document.body.contains(body)) return;
+        list.innerHTML = '';
+        const me = {
+          id: SELF_ID,
+          name: state.user.name || 'You',
+          role: ride.isCaptain ? 'Captain' : 'Member',
+          status: ride._myStatus || 'Riding normal',
+          distance: null,
+          color: '#0A6CFF',
+          self: true,
+        };
+        for (const p of [me, ...peerList()]) {
+          const row = document.createElement('div');
+          row.className = 'pack-rider';
+          const dist = p.self
+            ? 'You'
+            : p.distance == null
+              ? '—'
+              : p.distance > 995
+                ? `${(p.distance / 1000).toFixed(1)} km`
+                : `${p.distance} m`;
+          row.innerHTML = `
+            <div class="dot-av" style="background:${p.sos ? '#E02D2D' : p.color || '#0A6CFF'}">${esc((p.name || '?').charAt(0).toUpperCase())}</div>
+            <div class="mid">
+              <b>${esc(p.name)}${p.self ? ' (you)' : ''}</b>
+              <span>${esc(p.role)} · ${esc(p.status || 'Riding normal')}</span>
+            </div>
+            <div class="meta">${p.stale ? 'not updating' : esc(dist)}</div>`;
+          if (!p.self) {
+            row.style.cursor = 'pointer';
+            row.addEventListener('click', () => {
+              closeSheet();
+              setTimeout(() => openRiderSheet(p.id), 320);
+            });
+          }
+          list.append(row);
+        }
+      };
+
+      const renderLog = () => {
+        if (!document.body.contains(body)) return;
+        log.innerHTML = '';
+        if (!ride.messages.length) {
+          const empty = document.createElement('div');
+          empty.className = 'msg-empty';
+          empty.textContent = 'No messages yet. A quick reply goes to every rider in the room.';
+          log.append(empty);
+        }
+        for (const msg of ride.messages.slice(-40)) {
+          const el = document.createElement('div');
+          el.className = `msg ${msg.mine ? 'me' : ''}`;
+          el.innerHTML = `${esc(msg.text)}<small>${esc(msg.mine ? 'You' : msg.name)} · ${clock(msg.at)}</small>`;
+          log.append(el);
+        }
+        log.scrollTop = log.scrollHeight;
+      };
+
+      renderList();
+      renderLog();
+
+      for (const text of QUICK_MESSAGES) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'quick-msg';
+        b.textContent = text;
+        b.addEventListener('click', () => {
+          if (sendMessage(text)) {
+            haptic(8);
+            renderLog();
+          }
+        });
+        if (text.startsWith('SOS')) b.style.color = 'var(--red)';
+        quick.append(b);
+      }
+
+      form.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const text = String(form.elements.msg.value || '').trim();
+        if (!text) return;
+        if (sendMessage(text)) {
+          form.reset();
+          renderLog();
+          haptic(6);
+        }
+        return true;
+      });
+
+      body.querySelector('#packStatusBtn').addEventListener('click', () => {
+        closeSheet();
+        setTimeout(openStatusSheet, 320);
+      });
+      body.querySelector('#packInviteBtn').addEventListener('click', () => {
+        closeSheet();
+        setTimeout(openInviteSheet, 320);
+      });
+
+      // Live updates while the sheet stays open; unsubscribe once it is gone.
+      const offMsg = bus.on('ride:message', () => {
+        if (!document.body.contains(body)) { offMsg(); return; }
+        markMessagesRead();
+        renderLog();
+      });
+      const offPeers = bus.on('ride:peers', () => {
+        if (!document.body.contains(body)) { offPeers(); return; }
+        renderList();
+      });
     },
   });
 }

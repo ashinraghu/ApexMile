@@ -4,9 +4,15 @@
 //  • OSRM for geometry + turn-by-turn steps
 import { PLACES } from './places.js';
 import { distanceM, geo } from './geo.js';
+import { maneuverKey } from './navicons.js';
 
 const NOMINATIM = 'https://nominatim.openstreetmap.org';
 const OSRM = 'https://router.project-osrm.org';
+// Valhalla's public demo instance is the free way to get actual bicycle and
+// pedestrian routing (OSRM's demo only runs the car profile). If it is down we
+// fall back to OSRM geometry with a realistic speed for the mode.
+const VALHALLA = 'https://valhalla1.openstreetmap.de';
+const VALHALLA_COSTING = { car: 'auto', bike: 'bicycle', walk: 'pedestrian' };
 
 /* ------------------------------------------------------------------ search */
 
@@ -180,34 +186,176 @@ export async function directions({ from, to, via = [], mode = 'bike' }) {
   const points = [from, ...via.filter((p) => p && Number.isFinite(p.lat)), to];
   const coordStr = points.map((p) => `${Number(p.lng).toFixed(6)},${Number(p.lat).toFixed(6)}`).join(';');
   const allowAlternatives = points.length <= 2;
-  const profile = mode === 'walk' ? 'foot' : 'driving';
+
+  // Bicycle and pedestrian get a real network from Valhalla. Car keeps OSRM
+  // because it returns alternatives, which Valhalla's demo does not.
+  if (mode === 'bike' || mode === 'walk') {
+    try {
+      const route = await valhallaRoute(points, mode);
+      return { routes: [route], mode };
+    } catch (err) {
+      console.warn('[routing] valhalla unavailable, using OSRM', err?.message);
+    }
+  }
 
   const buildUrl = (p, alts) => `${OSRM}/route/v1/${p}/${coordStr}`
     + `?alternatives=${alts ? 'true' : 'false'}&overview=full&geometries=geojson&steps=true&annotations=false`;
 
-  let data = null;
-  let usedMode = mode;
-
-  try {
-    data = await fetchJson(buildUrl(profile, allowAlternatives));
-  } catch (err) {
-    // The public OSRM demo sometimes has no foot profile. Fall back to driving
-    // and stretch the duration to a walking pace rather than failing outright.
-    if (profile === 'foot') {
-      data = await fetchJson(buildUrl('driving', allowAlternatives));
-      usedMode = 'walk';
-    } else {
-      throw err;
-    }
-  }
-
+  const data = await fetchJson(buildUrl('driving', allowAlternatives));
   if (!data || data.code !== 'Ok' || !data.routes?.length) {
     throw new Error(data?.message || 'No route found for those points');
   }
 
-  const routes = data.routes.map((r, index) => normalizeRoute(r, index, usedMode));
+  const routes = data.routes.map((r, index) => normalizeRoute(r, index, mode));
+  for (const route of routes) {
+    route.duration = adjustedDuration(route, mode);
+    route.etaSource = 'osrm';
+  }
   if (!routes.length) throw new Error('No route found');
-  return { routes, mode: usedMode };
+  return { routes, mode };
+}
+
+/**
+ * Car ETAs from OSRM assume free-flowing traffic. Apply a modest urban factor
+ * instead of pretending it is live traffic. Bike and walk use a realistic
+ * moving average when Valhalla could not answer.
+ */
+function adjustedDuration(route, mode) {
+  const km = route.distance / 1000;
+  if (mode === 'walk') return (km / 4.8) * 3600;
+  if (mode === 'bike') {
+    const kmh = km < 12 ? 25 : km < 45 ? 33 : 44;
+    return (km / kmh) * 3600;
+  }
+  const factor = km < 12 ? 1.18 : km < 60 ? 1.1 : 1.05;
+  return route.duration * factor;
+}
+
+/* ------------------------------------------------------------------ Valhalla */
+
+function decodePolyline6(encoded) {
+  let index = 0;
+  let lat = 0;
+  let lng = 0;
+  const factor = 1e6;
+  const out = [];
+  while (index < encoded.length) {
+    let result = 0;
+    let shift = 0;
+    let byte;
+    do {
+      byte = encoded.charCodeAt(index++) - 63;
+      result |= (byte & 0x1f) << shift;
+      shift += 5;
+    } while (byte >= 0x20);
+    lat += result & 1 ? ~(result >> 1) : result >> 1;
+
+    result = 0;
+    shift = 0;
+    do {
+      byte = encoded.charCodeAt(index++) - 63;
+      result |= (byte & 0x1f) << shift;
+      shift += 5;
+    } while (byte >= 0x20);
+    lng += result & 1 ? ~(result >> 1) : result >> 1;
+
+    out.push([lng / factor, lat / factor]);
+  }
+  return out;
+}
+
+function shapeCoords(shape) {
+  if (!shape) return [];
+  if (typeof shape === 'string') return decodePolyline6(shape);
+  if (Array.isArray(shape?.coordinates)) return shape.coordinates;
+  return [];
+}
+
+// Valhalla manoeuvre types → the shared vector glyph keys (see navicons.js).
+const VALHALLA_ICONS = {
+  1: 'straight', 2: 'slight-right', 3: 'slight-left', 4: 'arrive', 5: 'slight-right', 6: 'slight-left',
+  7: 'straight', 8: 'straight', 9: 'slight-right', 10: 'right', 11: 'sharp-right', 12: 'uturn', 13: 'uturn',
+  14: 'sharp-left', 15: 'left', 16: 'slight-left', 17: 'merge', 18: 'merge', 19: 'merge',
+  20: 'slight-right', 21: 'slight-left', 22: 'straight', 23: 'slight-right', 24: 'slight-left', 25: 'merge',
+  26: 'roundabout', 27: 'roundabout', 28: 'ferry', 29: 'ferry', 37: 'merge',
+};
+
+async function valhallaRoute(points, mode) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 12000);
+  let data;
+  try {
+    const res = await fetch(`${VALHALLA}/route`, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({
+        locations: points.map((p) => ({ lat: Number(p.lat), lon: Number(p.lng), type: 'break' })),
+        costing: VALHALLA_COSTING[mode],
+        units: 'kilometers',
+        language: 'en-IN',
+        shape_format: 'geojson',
+        directions_options: { units: 'kilometers', language: 'en-IN' },
+      }),
+    });
+    if (!res.ok) throw new Error(`Valhalla returned ${res.status}`);
+    data = await res.json();
+  } finally {
+    clearTimeout(timer);
+  }
+
+  const legs = data?.trip?.legs;
+  if (!Array.isArray(legs) || !legs.length) throw new Error('No route found');
+
+  const coords = [];
+  const steps = [];
+  let begin = 0;
+
+  legs.forEach((leg, legIndex) => {
+    const legCoords = shapeCoords(leg.shape);
+    if (legIndex > 0 && coords.length && legCoords.length) {
+      const [lng, lat] = legCoords[0];
+      const [plng, plat] = coords[coords.length - 1];
+      if (Math.abs(lng - plng) < 1e-7 && Math.abs(lat - plat) < 1e-7) legCoords.shift();
+    }
+    coords.push(...legCoords);
+
+    const maneuvers = Array.isArray(leg.maneuvers) ? leg.maneuvers : [];
+    maneuvers.forEach((maneuver, i) => {
+      const distance = Math.max(0, Number(maneuver.length) || 0) * 1000;
+      const isLast = i === maneuvers.length - 1;
+      steps.push({
+        instruction: String(maneuver.instruction || (isLast ? 'You have arrived' : 'Continue')).replace(/<[^>]+>/g, ''),
+        icon: isLast ? 'arrive' : (VALHALLA_ICONS[Number(maneuver.type)] || 'straight'),
+        name: (maneuver.street_names || [])[0] || '',
+        distance,
+        duration: Number(maneuver.time) || 0,
+        beginDist: begin,
+        endDist: begin + distance,
+        maneuver: { type: isLast ? 'arrive' : 'turn', modifier: '' },
+      });
+      begin += distance;
+    });
+  });
+
+  if (coords.length < 2) throw new Error('Empty route geometry');
+
+  const km = (Number(data.trip.summary?.length) || 0);
+  const seconds = Number(data.trip.summary?.time) || 0;
+  const kmLabel = km >= 100 ? km.toFixed(0) : km.toFixed(1);
+  const mins = Math.round(seconds / 60);
+  const modeLabel = mode === 'walk' ? 'walking' : 'bike';
+
+  return {
+    id: 0,
+    distance: km * 1000,
+    duration: seconds,
+    coords,
+    steps,
+    mode,
+    etaSource: 'valhalla',
+    summary: `${kmLabel} km · ${mins} min · ${modeLabel}`,
+  };
 }
 
 function normalizeRoute(raw, index, mode) {
@@ -231,11 +379,7 @@ function normalizeRoute(raw, index, mode) {
     }
   }
 
-  let duration = Number(raw.duration) || 0;
-  if (mode === 'walk') {
-    // 4.8 km/h, which is what a person with a backpack actually walks.
-    duration = (Number(raw.distance) / 1000 / 4.8) * 3600;
-  }
+  const duration = Number(raw.duration) || 0;
 
   return {
     id: index,
@@ -311,20 +455,7 @@ export function buildInstruction(step) {
 }
 
 export function buildIcon(step) {
-  const m = step.maneuver || {};
-  const mod = m.modifier || '';
-  if (m.type === 'arrive') return '🏁';
-  if (m.type === 'roundabout' || m.type === 'rotary' || m.type === 'exit roundabout') return '🔄';
-  if (m.type === 'on ramp' || m.type === 'off ramp' || m.type === 'merge') return '🛣️';
-  if (mod.includes('uturn')) return '↩️';
-  if (mod.includes('sharp left')) return '⬅️';
-  if (mod.includes('slight left')) return '↖️';
-  if (mod.includes('left')) return '⬅️';
-  if (mod.includes('sharp right')) return '➡️';
-  if (mod.includes('slight right')) return '↗️';
-  if (mod.includes('right')) return '➡️';
-  if (m.type === 'fork') return '⤴️';
-  return '⬆️';
+  return maneuverKey(step.maneuver);
 }
 
 export function speakInstruction(step) {

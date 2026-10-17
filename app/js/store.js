@@ -3,7 +3,8 @@
 // photos-stripped retry if we ever hit the storage quota.
 import { bus } from './bus.js';
 
-const KEY = 'apexmile.v10';
+const KEY = 'apexmile.v11';
+const PREV_KEY = 'apexmile.v10'; // imported once, then left untouched
 const LEGACY_KEY = 'apexmile_map_radar_v9';
 
 export const FUEL_REGION_DEFAULT = {
@@ -15,15 +16,32 @@ export const FUEL_REGION_DEFAULT = {
   prices: { 91: 111.68, 95: 118.4, 100: 160.0 },
   verified: '2026-10-17',
   custom: false,
+  // True once a daily feed has replaced the baseline rates above.
+  live: false,
+  fetchedAt: '',
+  source: '',
 };
 
 function fresh() {
   return {
-    version: 10,
+    version: 11,
     user: { name: '', phone: '' },
     signedIn: false,
     theme: 'auto',
     motion: 'auto',
+    // Persisted so a rider who mutes navigation stays muted after signing in
+    // again. The nav bar toggle and the Garage switch share this one value.
+    navVoice: true,
+    // Optional custom MQTT WebSocket endpoint (advanced). Empty = auto failover.
+    broker: '',
+    // Free TomTom key for the live-traffic overlay. Stored locally, never in
+    // the repo; empty means the layer stays unavailable until it is added.
+    trafficKey: '',
+    trafficOn: false,
+    // Satellite is the only manual basemap choice left; remember it.
+    mapSatellite: false,
+    tripMode: 'bike',
+    tripModeSet: false,
     vehicles: [],
     activeVehicleId: '',
     logs: [], // newest first
@@ -42,15 +60,33 @@ export const state = fresh();
 
 function load() {
   let raw = null;
-  try { raw = localStorage.getItem(KEY); } catch { /* private mode */ }
+  try {
+    raw = localStorage.getItem(KEY);
+    if (!raw) {
+      const prev = localStorage.getItem(PREV_KEY);
+      if (prev) {
+        raw = prev;
+        // Carry the old record forward so the rider never re-enters anything.
+        localStorage.setItem(KEY, prev);
+        localStorage.removeItem(PREV_KEY);
+      }
+    }
+  } catch { /* private mode */ }
 
   if (raw) {
     try {
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed === 'object') {
         Object.assign(state, fresh(), parsed);
+        state.version = 11;
         state.region = { ...FUEL_REGION_DEFAULT, ...(parsed.region || {}) };
         state.region.prices = { ...FUEL_REGION_DEFAULT.prices, ...(parsed.region?.prices || {}) };
+        state.navVoice = parsed.navVoice !== false;
+        state.trafficKey = typeof parsed.trafficKey === 'string' ? parsed.trafficKey.trim() : '';
+        state.trafficOn = Boolean(parsed.trafficOn && state.trafficKey);
+        state.mapSatellite = Boolean(parsed.mapSatellite);
+        state.tripMode = parsed.tripMode === 'car' || parsed.tripMode === 'walk' ? parsed.tripMode : 'bike';
+        state.tripModeSet = Boolean(parsed.tripModeSet);
         state.vehicles = Array.isArray(parsed.vehicles) ? parsed.vehicles : [];
         state.logs = Array.isArray(parsed.logs) ? parsed.logs : [];
         if (!state.activeVehicleId && state.vehicles[0]) state.activeVehicleId = state.vehicles[0].id;
@@ -111,7 +147,7 @@ function migrateLegacy(old) {
   if (!vehicles.length) return null;
 
   return {
-    version: 10,
+    version: 11,
     user: {
       name: (old.user?.name || '').slice(0, 40),
       phone: (old.user?.contact || old.user?.phone || '').slice(0, 24),

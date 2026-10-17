@@ -2,7 +2,7 @@
  * Shell-first cache so the app opens instantly and works offline; map tiles get
  * their own bounded cache; routing and search stay network-only by design.
  */
-const VERSION = 'apexmile-v10.2.0';
+const VERSION = 'apexmile-v11.2.0';
 const SHELL = `${VERSION}-shell`;
 const TILES = `${VERSION}-tiles`;
 
@@ -28,10 +28,13 @@ const SHELL_FILES = [
   './js/geo.js',
   './js/map.js',
   './js/routing.js',
+  './js/tolls.js',
   './js/nav.js',
+  './js/navicons.js',
   './js/rooms.js',
   './js/journey.js',
   './js/places.js',
+  './js/prices.js',
   './js/sheets.js',
   './js/views.js',
   './js/main.js',
@@ -79,6 +82,9 @@ self.addEventListener('fetch', (event) => {
 
   // Never let the broker or auth flows enter a cache.
   if (url.protocol === 'wss:' || url.hostname === 'broker.emqx.io') return;
+
+  // Fuel prices are live data: always go to the network, never the shell cache.
+  if (url.origin === self.location.origin && url.pathname.startsWith('/api/')) return;
 
   // Navigation: network first, then the cached shell. This is what makes
   // "added to home screen" survive a dead connection.

@@ -12,26 +12,32 @@ import { geo, startGeolocation, freshFix, distanceM, bearingDeg, speedKmph } fro
 import * as mapCtl from './map.js';
 import {
   journey, plan, setDestination, setOrigin, setMode, clear as clearJourney,
-  currentRoute, estimates, hasRoute, addStop,
+  refresh as refreshJourney,
+  currentRoute, estimates, hasRoute, MODES, MODE_META, modeMinutes,
 } from './journey.js';
 import {
   localSuggest, remoteSuggest, geocode, reverseDistrict, reversePlace, formatDistance,
 } from './routing.js';
-import { nav, startNavigation, stopNavigation, toggleVoice } from './nav.js';
+import {
+  nav, startNavigation, stopNavigation, toggleVoice, setVoice, enterImmersive, exitImmersive,
+} from './nav.js';
 import {
   ride, createRide, joinRide, leaveRide, pingPeer, peerList,
   setDestination as setRideDestination, requestNotifications, normalizeCode, publishNow,
-  setMyStatus,
+  setMyStatus, markMessagesRead, connectionInfo, reconnectRide,
+  setMode as setRideMode,
 } from './rooms.js';
 import {
   openTripSheet, openJoinSheet, openInviteSheet, openRiderSheet, openStatusSheet,
-  openStopsSheet, openStepsSheet, openProfileSheet,
+  openStepsSheet, openProfileSheet, openPackSheet,
 } from './sheets.js';
 import {
   renderHome, renderRefuel, renderInsights, renderGarage, renderAll,
   initRefuel, initGarage,
 } from './views.js';
 import { FUEL_REGIONS, STATE_DEFAULT_PRICES, PRICES_VERIFIED } from './places.js';
+import { tollPlazasFor } from './tolls.js';
+import { refreshFuelPrices } from './prices.js';
 
 const TABS = ['home', 'refuel', 'radar', 'insights', 'garage', 'privacy', 'safety'];
 const TITLES = {
@@ -39,10 +45,10 @@ const TITLES = {
   insights: 'Insights', garage: 'Garage', privacy: 'Privacy', safety: 'Riding safety',
 };
 
+let booted = false;
 let currentTab = 'home';
 let mapInitialised = false;
 let lastPeerSig = null;
-let mapLayerPinned = false;
 let lastGeoErrAt = 0;
 let lastRideOfflineToast = 0;
 let geoFixStamp = 0;
@@ -51,12 +57,21 @@ let suggestionsToken = 0;
 /* ================================================================== boot */
 
 function boot() {
+  if (booted) return;
+  booted = true;
   applyTheme(state.theme);
   applyMotion(state.motion);
+  // The traffic key is a rider setting; hand it to the map before the radar is
+  // opened so a restored overlay is live from the first frame.
+  mapCtl.setTrafficKey(state.trafficKey);
+  mapCtl.setTraffic(Boolean(state.trafficOn && state.trafficKey));
 
   initSheets();
   initRefuel();
   initGarage();
+  initSettings();
+  setVoice(state.navVoice !== false);
+  refreshModeUi();
   initTabs();
   initHeader();
   initRadarUi();
@@ -84,6 +99,9 @@ function boot() {
   renderAll();
   renderSync();
   registerServiceWorker();
+  // Today's district rate, fetched once the shell is on screen. If the feed is
+  // unreachable the verified baseline above simply stays in place.
+  refreshFuelPrices().catch(() => {});
 
   $('#boot')?.classList.add('hide');
   setTimeout(() => { const b = $('#boot'); if (b) b.remove(); }, 600);
@@ -126,8 +144,11 @@ function showAuth() {
 }
 
 function syncTravelMode() {
-  const mode = activeVehicle()?.type === 'Car' ? 'car' : 'bike';
-  if (journey.mode !== mode) setMode(mode);
+  if (!journey.userMode) {
+    const mode = activeVehicle()?.type === 'Car' ? 'car' : 'bike';
+    if (journey.mode !== mode) setMode(mode, { explicit: false });
+  }
+  refreshModeUi();
 }
 
 function enterApp() {
@@ -224,7 +245,14 @@ function hashTab() {
 
 function go(tab, { replace = false, fromHistory = false } = {}) {
   if (!TABS.includes(tab)) tab = 'home';
+  // Claim the tab before ending guidance: the nav:end handler needs to know
+  // whether the rider is still looking at the map (restore the Directions
+  // preview) or has moved on (leave it until they come back).
+  const leavingRadar = nav.active && tab !== 'radar';
   currentTab = tab;
+  // The map is the whole screen during guidance, so leaving it would leave the
+  // rider staring at a blank page. Treat it like closing navigation.
+  if (leavingRadar) stopNavigation({ reason: 'Navigation ended' });
 
   for (const el of $$('.tab')) el.hidden = el.dataset.tab !== tab;
   for (const btn of $$('.tb')) btn.classList.toggle('active', btn.dataset.tab === tab);
@@ -296,7 +324,149 @@ function renderSync() {
   if (!ride.active) { label.textContent = 'Solo'; return; }
   if (ride.status === 'live') { dot.classList.add('live'); label.textContent = 'Live'; }
   else if (ride.status === 'connecting') { dot.classList.add('warn'); label.textContent = 'Linking'; }
-  else { dot.classList.add('off'); label.textContent = 'Offline'; }
+  else { dot.classList.add('warn'); label.textContent = 'Retrying'; }
+}
+
+/* ------------------------------------------------------------------ settings */
+
+function syncVoiceUi() {
+  const toggle = $('#voiceToggle');
+  if (!toggle) return;
+  toggle.setAttribute('aria-checked', nav.voiceOn ? 'true' : 'false');
+  toggle.setAttribute('aria-label', nav.voiceOn ? 'Voice navigation on' : 'Voice navigation muted');
+}
+
+function renderSyncTransport() {
+  const el = $('#syncTransportSub');
+  if (!el) return;
+  if (!ride.active) {
+    el.textContent = 'Public brokers · automatic failover';
+    return;
+  }
+  const info = connectionInfo();
+  const link = ride.connected ? 'connected' : ride.status === 'connecting' ? 'linking…' : 'retrying…';
+  el.textContent = `${info.brokerLabel || 'Auto'} · ${link}`;
+}
+
+function updateChatBadge(unread) {
+  const badge = $('#gbChatBadge');
+  if (!badge) return;
+  const n = Number(unread) || 0;
+  badge.textContent = n > 9 ? '9+' : String(n);
+  badge.hidden = n <= 0;
+}
+
+function openSyncSheet() {
+  const info = connectionInfo();
+  const linkText = !ride.active
+    ? 'No ride is open.'
+    : ride.connected
+      ? 'Connected — positions and messages are flowing.'
+      : ride.status === 'connecting'
+        ? 'Linking to a broker…'
+        : 'No broker answered yet. Retrying automatically every 15 seconds.';
+
+  openSheet({
+    title: 'Ride sync',
+    html: `
+      <div class="prose">
+        <p><b>${ride.active ? `Room ${esc(ride.code)}` : 'Not in a ride'}</b></p>
+        <p>${linkText}</p>
+        <p class="hint">${info.broker ? `Broker: ${esc(info.brokerLabel || info.broker)}` : 'Broker: choosing the best of four public relays'}</p>
+        <p class="hint">${info.lastError ? `Last socket error: ${esc(info.lastError)}` : 'No socket error recorded.'}</p>
+        <p class="hint">Public brokers are unauthenticated demos. Use them with people you trust.</p>
+      </div>
+      <div class="sheet-actions">
+        <button class="btn ghost" type="button" data-close>Close</button>
+        <button class="btn primary" type="button" id="syncRetry">${ride.active ? 'Reconnect now' : 'Start a ride'}</button>
+      </div>`,
+    mount(body) {
+      body.querySelector('#syncRetry').addEventListener('click', () => {
+        closeSheet();
+        if (!ride.active) { openTripSheet(); return; }
+        reconnectRide();
+        toast('Reconnecting to the ride room…', { icon: '📡' });
+      });
+    },
+  });
+}
+
+function initSettings() {
+  syncVoiceUi();
+  renderSyncTransport();
+  updateChatBadge(ride._unread);
+
+  $('#voiceToggle')?.addEventListener('click', () => {
+    const on = setVoice(!nav.voiceOn);
+    state.navVoice = on;
+    saveNow();
+    syncVoiceUi();
+    haptic(8);
+    toast(on ? 'Voice navigation on' : 'Voice navigation muted — saved', {
+      icon: on ? '🔊' : '🔇',
+      ms: 2000,
+    });
+  });
+
+  $('#syncTestBtn')?.addEventListener('click', openSyncSheet);
+
+  const trafficSetup = $('#trafficSetupBtn');
+  if (trafficSetup) trafficSetup.textContent = state.trafficKey ? 'Change key' : 'Set up';
+}
+
+/* ------------------------------------------------------------------ live traffic */
+
+/**
+ * TomTom is the only traffic provider with a free flow-tile tier that does not
+ * require a credit card (50,000 tiles/day). A key cannot be shipped in the
+ * bundle — it is public the moment it is committed — so the rider pastes their
+ * own, it is stored in this browser, and the overlay is optional.
+ */
+function openTrafficSheet() {
+  const current = state.trafficKey || '';
+  openSheet({
+    title: 'Live traffic',
+    html: `
+      <p class="hint">Live traffic paints colour-coded flow over the map. It needs a free TomTom key —
+        TomTom includes 50,000 tile requests a day and does not ask for a card.</p>
+      <label class="field"><span>TomTom API key</span>
+        <input id="trafficKeyInput" type="text" autocomplete="off" autocapitalize="off"
+          spellcheck="false" placeholder="Paste your key" value="${esc(current)}" />
+      </label>
+      <p class="hint">Create one at <b>developer.tomtom.com</b> → My Dashboard → Keys, and restrict it
+        to this domain. The key stays on this device and is never part of the app bundle.</p>
+      <div class="sheet-actions">
+        ${current
+          ? '<button class="btn ghost" type="button" id="trafficRemove">Remove key</button>'
+          : '<button class="btn ghost" type="button" data-close>Cancel</button>'}
+        <button class="btn primary" type="button" id="trafficSave">${current ? 'Save & show traffic' : 'Enable live traffic'}</button>
+      </div>`,
+    mount(body) {
+      const input = body.querySelector('#trafficKeyInput');
+      body.querySelector('#trafficSave')?.addEventListener('click', () => {
+        const key = (input?.value || '').trim();
+        if (key.length < 16) return toast('That key looks too short — paste the whole key', { type: 'warn' });
+        state.trafficKey = key;
+        state.trafficOn = true;
+        saveNow();
+        mapCtl.setTrafficKey(key);
+        mapCtl.setTraffic(true);
+        syncLayerPills();
+        closeSheet();
+        toast('Live traffic on', { ms: 2200 });
+      });
+      body.querySelector('#trafficRemove')?.addEventListener('click', () => {
+        state.trafficKey = '';
+        state.trafficOn = false;
+        saveNow();
+        mapCtl.setTrafficKey('');
+        mapCtl.setTraffic(false);
+        syncLayerPills();
+        closeSheet();
+        toast('Live traffic key removed');
+      });
+    },
+  });
 }
 
 /* ------------------------------------------------------------------ radar */
@@ -330,7 +500,6 @@ function initRadarUi() {
     setTimeout(() => openJoinSheet(), 360);
   });
 
-  $('#routeBtn')?.addEventListener('click', () => submitDestination());
   $('#destInput')?.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); submitDestination(); }
   });
@@ -362,11 +531,18 @@ function initRadarUi() {
 
   $('#swapBtn')?.addEventListener('click', swapEnds);
   $('#micBtn')?.addEventListener('click', startVoiceSearch);
-  $('#addStopBtn')?.addEventListener('click', openStopsSheet);
-  $('#stopsStrip')?.addEventListener('click', openStopsSheet);
- $('#rsStepsBtn')?.addEventListener('click', openStepsSheet);
+  $('#rsStepsBtn')?.addEventListener('click', openStepsSheet);
   $('#rsClearBtn')?.addEventListener('click', () => { clearJourney(); hideSuggestions(); $('#destInput').value = ''; });
-  $('#rsStartBtn')?.addEventListener('click', startPlannedNavigation);
+  $('#directionsBtn')?.addEventListener('click', onDirectionsPressed);
+  $$('.mode-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const mode = btn.dataset.mode;
+      setMode(mode);
+      refreshModeUi();
+      if (ride.active && ride.isCaptain) setRideMode(mode);
+      haptic(6);
+    });
+  });
 
   $('#navExitBtn')?.addEventListener('click', confirmEndNavigation);
   $('#navEtaBtn')?.addEventListener('click', openStepsSheet);
@@ -376,24 +552,44 @@ function initRadarUi() {
   });
   $('#navVoiceBtn')?.addEventListener('click', () => {
     const on = toggleVoice();
+    state.navVoice = on;
+    saveNow();
+    syncVoiceUi();
     toast(on ? 'Voice on' : 'Voice muted', { icon: on ? '🔊' : '🔇', ms: 1400 });
   });
 
   $('#gbShare')?.addEventListener('click', openInviteSheet);
   $('#gbMe')?.addEventListener('click', openStatusSheet);
-
-  $$('.pill[data-layer]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      $$('.pill[data-layer]').forEach((b) => b.classList.toggle('active', b === btn));
-      mapLayerPinned = true;
-      mapCtl.setStylePreset(btn.dataset.layer);
-      haptic(5);
-    });
+  $('#gbChat')?.addEventListener('click', () => {
+    openPackSheet();
+    markMessagesRead();
   });
 
-  $('#poiFuel')?.addEventListener('click', () => loadPois('fuel'));
-  $('#poiFood')?.addEventListener('click', () => loadPois('food'));
-  $('#poiRepair')?.addEventListener('click', () => loadPois('repair'));
+  // Satellite is a toggle; the theme still owns streets/night underneath it.
+  $('#satellitePill')?.addEventListener('click', () => {
+    const on = mapCtl.mapState().preset !== 'satellite';
+    mapCtl.setStylePreset(on ? 'satellite' : basePreset());
+    state.mapSatellite = on;
+    saveNow();
+    syncLayerPills();
+    haptic(5);
+  });
+
+  $('#trafficPill')?.addEventListener('click', () => {
+    if (!state.trafficKey) {
+      openTrafficSheet();
+      return;
+    }
+    const on = !mapCtl.mapState().traffic;
+    mapCtl.setTraffic(on);
+    state.trafficOn = on;
+    saveNow();
+    syncLayerPills();
+    haptic(5);
+    toast(on ? 'Live traffic on' : 'Live traffic off', { ms: 1400 });
+  });
+
+  $('#trafficSetupBtn')?.addEventListener('click', openTrafficSheet);
 
   // Tapping empty map dismisses the keyboard and suggestions.
   $('#map')?.addEventListener('click', () => {
@@ -408,7 +604,7 @@ async function openRadar() {
     const center = geo.pos || state.lastPos || undefined;
     mapCtl.initMap({
       center,
-      preset: document.documentElement.dataset.theme === 'dark' ? 'night' : 'streets',
+      preset: state.mapSatellite ? 'satellite' : basePreset(),
     });
     syncLayerPills();
     $('#fabLocate')?.classList.add('on');
@@ -420,20 +616,44 @@ async function openRadar() {
   if (!hasRoute() && geo.pos && !nav.active) {
     setTimeout(() => mapCtl.recenter(geo.pos, { zoom: 15.8, duration: 400 }), 260);
   }
+  // A plan survives leaving the radar; bring its preview back rather than
+  // stranding the rider with a route on the map and no card.
+  if (hasRoute() && !nav.active && !journey.loading && $('#routeSheet')?.hidden) {
+    refreshJourney();
+  }
+}
+
+function basePreset() {
+  return document.documentElement.dataset.theme === 'dark' ? 'night' : 'streets';
 }
 
 function syncLayerPills() {
-  $$('.pill[data-layer]').forEach((b) => {
-    b.classList.toggle('active', b.dataset.layer === (mapCtl.mapState().preset || 'streets'));
-  });
+  const st = mapCtl.mapState();
+
+  const satellite = $('#satellitePill');
+  const satOn = st.preset === 'satellite';
+  satellite?.classList.toggle('active', satOn);
+  satellite?.setAttribute('aria-pressed', satOn ? 'true' : 'false');
+
+  const traffic = $('#trafficPill');
+  const trafficOn = Boolean(st.traffic);
+  traffic?.classList.toggle('active', trafficOn);
+  traffic?.classList.toggle('needs-key', !state.trafficKey);
+  traffic?.setAttribute('aria-pressed', trafficOn ? 'true' : 'false');
+  traffic?.setAttribute('aria-label', state.trafficKey
+    ? (trafficOn ? 'Turn live traffic off' : 'Turn live traffic on')
+    : 'Set up live traffic');
+
+  const setup = $('#trafficSetupBtn');
+  if (setup) setup.textContent = state.trafficKey ? 'Change key' : 'Set up';
 }
 
-/** Keep the basemap in step with the app theme, without fighting a manual layer choice. */
+/** Keep the basemap in step with the app theme, without fighting satellite. */
 function syncMapTheme() {
-  if (!mapInitialised || mapLayerPinned) return;
+  if (!mapInitialised) return;
   const preset = mapCtl.mapState().preset;
-  if (preset !== 'streets' && preset !== 'night') return;
-  const target = document.documentElement.dataset.theme === 'dark' ? 'night' : 'streets';
+  if (preset === 'satellite') return; // an explicit rider choice wins
+  const target = basePreset();
   if (target !== preset) {
     mapCtl.setStylePreset(target);
     syncLayerPills();
@@ -515,6 +735,8 @@ async function submitDestination() {
   }
   const place = await geocode(value);
   if (!place) return toast(`Could not find “${value}”`, { type: 'err' });
+  $('#destInput').value = place.name;
+  $('#destClear').hidden = false;
   await setDestination(place);
 }
 
@@ -570,23 +792,25 @@ function onJourneyUpdate({ cleared } = {}) {
     }
     const originInput = $('#originInput');
     if (originInput) originInput.value = '';
-    $('#stopsStrip').hidden = true;
+    const cost = $('#rsCost');
+    if (cost) cost.hidden = true;
+    const etas = $('#modeEtas');
+    if (etas) etas.hidden = true;
+    refreshModeUi();
     return;
   }
 
-  if (journey.stops.length) {
-    const strip = $('#stopsStrip');
-    strip.hidden = false;
-    strip.innerHTML = journey.stops
-      .map((s, i) => `<span class="stop-chip">${i + 1}. ${esc(s.name)}</span>`)
-      .join('');
-  } else {
-    $('#stopsStrip').hidden = true;
-  }
-
   if (journey.loading) {
+    sheet.hidden = false;
+    document.body.classList.add('has-sheet');
     $('#rsEta').textContent = 'Planning…';
     $('#rsDist').textContent = '';
+    $('#rsSub').textContent = `Best ${MODE_META[journey.mode]?.label.toLowerCase() || ''} route`;
+    $('#rsNote').textContent = 'Checking roads, turns and tolls.';
+    const cost = $('#rsCost');
+    if (cost) cost.hidden = true;
+    refreshModeUi();
+    return;
   }
 
   const route = currentRoute();
@@ -598,7 +822,10 @@ function onJourneyUpdate({ cleared } = {}) {
       $('#rsSub').textContent = journey.error;
       $('#rsNote').textContent = 'Check the start and destination, or try again when you are online.';
       $('#alts').hidden = true;
+      const cost = $('#rsCost');
+      if (cost) cost.hidden = true;
     }
+    refreshModeUi();
     return;
   }
 
@@ -609,8 +836,7 @@ function onJourneyUpdate({ cleared } = {}) {
   const mins = Math.max(1, Math.round(route.duration / 60));
   $('#rsEta').textContent = mins < 60 ? `${mins} min` : `${Math.floor(mins / 60)} hr ${mins % 60} min`;
   $('#rsDist').textContent = `${est.km >= 10 ? est.km.toFixed(1) : est.km.toFixed(2)} km`;
-  $('#rsSub').textContent = `${route.summary.split('·').slice(-1)[0].trim()} · ${clockTime(est.arrival)} arrival`;
-  $('#rsNote').textContent = `≈ ₹${Math.round(est.fuel)} fuel${journey.mode === 'car' ? ' · tolls not included' : ' · no tolls for bikes'}`;
+  $('#rsSub').textContent = `${MODE_META[journey.mode]?.label || 'Route'} · ${clockTime(est.arrival)} arrival`;
 
   const alts = $('#alts');
   if (journey.routes.length > 1) {
@@ -628,15 +854,171 @@ function onJourneyUpdate({ cleared } = {}) {
   } else {
     alts.hidden = true;
   }
+
+  renderModeEtas(route);
+  renderRouteCost(route);
+  refreshModeUi();
+  syncCaptainDestination();
+
+  if (est.mode === 'car') ensureTolls(route);
+}
+
+/** The single primary button: Directions first, then Start once a route exists. */
+function refreshModeUi() {
+  $$('.mode-btn').forEach((b) => {
+    const on = b.dataset.mode === journey.mode;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+  const go = $('#directionsBtn');
+  if (!go) return;
+  const typed = ($('#destInput')?.value || '').trim();
+  const pending = Boolean(typed) && (
+    !journey.dest || typed.toLowerCase() !== String(journey.dest.name).toLowerCase()
+  );
+  const ready = Boolean(journey.dest && currentRoute()) && !pending;
+  go.textContent = ready ? 'Start ride' : 'Directions';
+  go.classList.toggle('ready', ready);
+  go.setAttribute('aria-label', ready ? 'Start navigation' : 'Show directions');
+  go.disabled = Boolean(journey.loading);
+}
+
+function onDirectionsPressed() {
+  if (journey.loading) return toast('Still planning…', { ms: 1200 });
+  const typed = ($('#destInput')?.value || '').trim();
+  const differs = typed && (!journey.dest || typed.toLowerCase() !== String(journey.dest.name).toLowerCase());
+  if (differs) {
+    // Typed but not yet picked from the list — geocode it and show the route.
+    submitDestination();
+    return;
+  }
+  if (!journey.dest) {
+    $('#destInput')?.focus();
+    toast('Where to?', { icon: '📍', ms: 1800 });
+    return;
+  }
+  if (hasRoute()) {
+    startPlannedNavigation();
+    return;
+  }
+  plan();
+}
+
+function renderModeEtas(route) {
+  const host = $('#modeEtas');
+  if (!host) return;
+  host.hidden = false;
+  host.innerHTML = '';
+  for (const mode of MODES) {
+    const mins = modeMinutes(mode, route);
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = `mode-eta ${journey.mode === mode ? 'active' : ''}`;
+    b.setAttribute('aria-pressed', journey.mode === mode ? 'true' : 'false');
+    b.innerHTML = `<span>${MODE_META[mode].icon} ${MODE_META[mode].label}</span><b>${mins} min</b>`;
+    b.addEventListener('click', () => {
+      if (journey.mode === mode) return;
+      haptic(6);
+      setMode(mode);
+      refreshModeUi();
+      if (ride.active && ride.isCaptain) setRideMode(mode);
+    });
+    host.append(b);
+  }
+}
+
+function renderRouteCost(route) {
+  const host = $('#rsCost');
+  if (!host) return;
+  const est = estimates(route);
+  if (!est) { host.hidden = true; return; }
+  host.hidden = false;
+
+  if (est.mode === 'walk') {
+    host.innerHTML = '<div class="rs-cost-row"><span>Walking</span><b>No fuel or tolls</b></div>';
+    $('#rsNote').textContent = 'Pedestrian route. No fuel or toll cost.';
+    return;
+  }
+
+  const fuel = Math.round(est.fuel);
+  const tolls = Math.round(est.tolls);
+  const total = Math.round(est.total);
+  const info = route.tollInfo;
+
+  let tollCell = '<b>Free for bikes</b>';
+  let tollLabel = 'Tolls';
+  if (est.mode === 'car') {
+    if (!info) {
+      tollCell = '<b>Checking…</b>';
+    } else if (info.unavailable) {
+      tollCell = '<b>Not available</b>';
+      tollLabel = 'Tolls';
+    } else {
+      tollCell = `<b>₹${tolls}</b>`;
+      tollLabel = `Tolls · ${info.count} plaza${info.count === 1 ? '' : 's'}`;
+    }
+  }
+
+  host.innerHTML = `
+    <div class="rs-cost-row"><span>Fuel${est.litres ? ` · ${est.litres.toFixed(1)} L` : ''}</span><b>₹${fuel}</b></div>
+    <div class="rs-cost-row"><span>${tollLabel}</span>${tollCell}</div>
+    <div class="rs-cost-row total"><span>Estimated total · ${esc(est.vehicleName)}${est.vehicleType && est.mode !== 'walk' && est.vehicleType.toLowerCase() !== est.mode ? ` · ${esc(est.vehicleType.toLowerCase())}` : ''}</span><b>₹${total}</b></div>
+    <div class="rs-cost-row"><span class="fine">${est.measured ? `At your measured ${est.kmpl.toFixed(1)} km/L` : `At an estimated ${est.kmpl.toFixed(1)} km/L`} · ₹${(state.region.prices[state.octane] || 0).toFixed(2)}/L</span></div>`;
+
+  if (est.mode === 'bike') {
+    $('#rsNote').textContent = 'Bikes are toll-free on national highways. Fuel uses your own mileage.';
+  } else if (!info) {
+    $('#rsNote').textContent = 'Looking for toll plazas along this route…';
+  } else if (info.unavailable) {
+    $('#rsNote').textContent = 'Toll estimate unavailable for a route this long. Fuel cost is still included.';
+  } else {
+    const noCar = est.vehicleType && est.vehicleType !== 'Car'
+      ? `No car in the garage — fuel uses ${est.vehicleName}'s mileage. `
+      : '';
+    $('#rsNote').textContent = `${noCar}Tolls estimated from ${info.count} mapped plaza${info.count === 1 ? '' : 's'} at ₹${info.rate}/plaza. Actual FASTag rates vary.`;
+  }
+}
+
+async function ensureTolls(route) {
+  if (!route || route.tollInfo || route._tollsBusy || !route.coords?.length) return;
+  route._tollsBusy = true;
+  try {
+    const info = await tollPlazasFor(route.coords, 'car');
+    route.tollInfo = info;
+    route.tolls = info.total;
+  } catch {
+    route.tollInfo = { count: 0, rate: 0, total: 0, plazas: [], unavailable: true };
+  } finally {
+    route._tollsBusy = false;
+    if (currentRoute() === route && journey.mode === 'car') renderRouteCost(route);
+  }
+}
+
+/** The captain's destination is the pack's destination. Publish it as soon as
+ *  it is chosen, not only when navigation starts. */
+function syncCaptainDestination() {
+  if (!ride.active || !ride.isCaptain || !journey.dest) return;
+  const current = ride.dest;
+  const same = current
+    && Math.abs(Number(current.lat) - Number(journey.dest.lat)) < 1e-6
+    && Math.abs(Number(current.lng) - Number(journey.dest.lng)) < 1e-6;
+  if (!same) setRideDestination(journey.dest, false);
 }
 
 async function startPlannedNavigation() {
   if (!journey.dest) return;
   if (journey.loading) return toast('Still planning…', { ms: 1200 });
 
-  const btn = $('#rsStartBtn');
-  btn.disabled = true;
-  btn.textContent = '…';
+  // Ask for the system fullscreen while the tap is still a user gesture. A
+  // re-plan below can await the network, and browsers only honour the request
+  // while it is still tied to the gesture.
+  enterImmersive();
+
+  const btn = $('#directionsBtn');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Starting…';
+  }
 
   try {
     // If we planned from "my location" a while ago, re-plan from where we are now.
@@ -659,9 +1041,13 @@ async function startPlannedNavigation() {
     }
   } catch {
     toast('Could not start navigation', { type: 'err' });
+    exitImmersive();
   } finally {
-    btn.disabled = false;
-    btn.textContent = 'Start';
+    if (!nav.active) exitImmersive();
+    if (btn) {
+      btn.disabled = false;
+      refreshModeUi();
+    }
   }
 }
 
@@ -686,6 +1072,7 @@ function confirmEndNavigation() {
 
 async function startRideFromModal({ trip, dest }) {
   createRide({ trip: trip || 'Group ride' });
+  if (ride.isCaptain) setRideMode(journey.mode);
   // Never block the ride on a permission dialog.
   requestNotifications().catch(() => {});
   toast(`Room ${ride.code} is live`, { icon: '📡', ms: 3000 });
@@ -825,59 +1212,6 @@ function syncPeersToMap() {
   updateGroupUi();
 }
 
-/* ------------------------------------------------------------------ POI */
-
-let poiToken = 0;
-
-async function loadPois(category) {
-  const pos = geo.pos;
-  if (!pos) return toast('Wait for a GPS fix first', { type: 'warn' });
-  const token = ++poiToken;
-  const filters = {
-    fuel: { q: '["amenity"="fuel"]', emoji: '⛽', label: 'Fuel pumps' },
-    food: { q: '["amenity"~"restaurant|cafe|fast_food"]', emoji: '🍽', label: 'Food' },
-    repair: { q: '["shop"~"car_repair|motorcycle|tyres"]', emoji: '🔧', label: 'Repair' },
-  }[category];
-  if (!filters) return;
-
-  toast(`Finding ${filters.label.toLowerCase()} within 5 km…`, { icon: '🔎', ms: 2200 });
-
-  const query = `[out:json][timeout:20];nwr${filters.q}(around:5000,${pos.lat.toFixed(5)},${pos.lng.toFixed(5)});out center 24;`;
-  const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), 15000);
-  try {
-    const res = await fetch(`https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`, {
-      headers: { Accept: 'application/json' },
-      signal: ctl.signal,
-    });
-    if (!res.ok) throw new Error(String(res.status));
-    const data = await res.json();
-    if (token !== poiToken) return;
-    const nodes = (data.elements || [])
-      .map((n) => ({
-        ...n,
-        lat: Number.isFinite(n.lat) ? n.lat : n.center?.lat,
-        lon: Number.isFinite(n.lon) ? n.lon : n.center?.lon,
-      }))
-      .filter((n) => Number.isFinite(n.lat) && Number.isFinite(n.lon));
-    if (!nodes.length) return toast(`No ${filters.label.toLowerCase()} found within 5 km`, { type: 'warn' });
-
-    const items = nodes.slice(0, 20).map((n) => ({
-      lat: n.lat,
-      lng: n.lon,
-      emoji: filters.emoji,
-      label: n.tags?.name || n.tags?.brand || filters.label.replace(/s$/, ''),
-      sub: n.tags?.name ? filters.label : '',
-    }));
-    mapCtl.setPois(items);
-    toast(`${items.length} ${filters.label.toLowerCase()} — tap a pin to route`, { icon: '📍' });
-  } catch {
-    toast('Place search is busy — try again in a moment', { type: 'warn' });
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 /* ------------------------------------------------------------------ region */
 
 let regionBusy = false;
@@ -905,6 +1239,9 @@ async function detectRegion(force = false) {
         state: place?.state || nearest.r.state,
         verified: PRICES_VERIFIED,
         custom: false,
+        live: false,
+        fetchedAt: '',
+        source: '',
       });
     } else if (place?.state) {
       const statePrices = STATE_DEFAULT_PRICES[place.state.toLowerCase()]?.prices;
@@ -914,10 +1251,14 @@ async function detectRegion(force = false) {
         prices: { ...(statePrices || state.region.prices) },
         verified: PRICES_VERIFIED,
         custom: false,
+        live: false,
+        fetchedAt: '',
+        source: '',
       });
     }
     if (force) toast(`Rates for ${state.region.city}, ${state.region.state}`, { icon: '⛽' });
     renderAll();
+    refreshFuelPrices({ force: true }).catch(() => {});
   } finally {
     regionBusy = false;
   }
@@ -1020,13 +1361,17 @@ function wireBus() {
 
   bus.on('journey:update', onJourneyUpdate);
 
-  bus.on('journey:add-stop', async ({ place, position }) => {
-    await addStop(place, position);
-  });
-
   bus.on('ride:changed', () => {
     updateGroupUi();
     renderSync();
+    renderSyncTransport();
+    refreshModeUi();
+  });
+
+  bus.on('ride:transport', () => renderSyncTransport());
+
+  bus.on('ride:message', ({ unread } = {}) => {
+    updateChatBadge(unread);
   });
 
   bus.on('ride:peers', () => {
@@ -1036,6 +1381,8 @@ function wireBus() {
 
   bus.on('ride:status', ({ status } = {}) => {
     renderSync();
+    renderSyncTransport();
+    updateChatBadge(ride._unread);
     if (status === 'offline' && ride.active && Date.now() - lastRideOfflineToast > 20000) {
       lastRideOfflineToast = Date.now();
       toast('Ride sync is offline — position sharing will resume when the connection returns', { type: 'warn', icon: '📡', ms: 4500 });
@@ -1068,6 +1415,10 @@ function wireBus() {
       return;
     }
     toast(`${pkt.captainName || 'Captain'} set the destination: ${pkt.dest.name}`, { icon: '📡', ms: 5000 });
+    if (pkt.mode && pkt.mode !== journey.mode) {
+      setMode(pkt.mode, { explicit: false });
+      refreshModeUi();
+    }
     const place = { name: pkt.dest.name, lat: pkt.dest.lat, lng: pkt.dest.lng };
     $('#destInput').value = place.name;
     $('#destClear').hidden = false;
@@ -1114,7 +1465,6 @@ function wireBus() {
         <div class="field"><span>${esc(place.name)}</span>
           <small>${esc(place.sub || `${lat.toFixed(5)}, ${lng.toFixed(5)}`)}</small></div>
         <div class="sheet-actions">
-          <button class="btn ghost" type="button" id="pinStop">Add as stop</button>
           <button class="btn primary" type="button" id="pinRoute">Route here</button>
         </div>
         ${ride.active && ride.isCaptain ? '<button class="btn ghost wide" type="button" id="pinShare">Send as the pack destination</button>' : ''}`,
@@ -1124,11 +1474,6 @@ function wireBus() {
           $('#destInput').value = place.name;
           $('#destClear').hidden = false;
           setDestination(place);
-        });
-        body.querySelector('#pinStop').addEventListener('click', async () => {
-          closeSheet();
-          await addStop(place);
-          toast('Stop added');
         });
         body.querySelector('#pinShare')?.addEventListener('click', () => {
           setRideDestination(place, false);
@@ -1144,11 +1489,13 @@ function wireBus() {
     mapCtl.recenter({ lat, lng }, { zoom: 16, duration: 600 });
   });
 
-  bus.on('poi:pick', async (item) => {
-    const place = { name: item.label || 'Selected place', lat: item.lat, lng: item.lng };
-    $('#destInput').value = place.name;
-    $('#destClear').hidden = false;
-    await setDestination(place);
+  bus.on('traffic:error', () => {
+    // The key was rejected (invalid, expired, or domain-restricted elsewhere).
+    state.trafficOn = false;
+    saveNow();
+    mapCtl.setTraffic(false);
+    syncLayerPills();
+    toast('TomTom rejected the traffic key — update it in Ride settings', { type: 'err', ms: 5200 });
   });
 
   bus.on('region:detect', () => detectRegion(true));
@@ -1173,19 +1520,41 @@ function wireBus() {
   bus.on('store:quota', ({ message }) => toast(message, { type: 'warn', ms: 6000 }));
 
   bus.on('nav:start', () => {
+    // A captain can start guidance for the pack while a follower is on another
+    // tab; the immersive layout only works on the radar screen.
+    if (currentTab !== 'radar') go('radar', { replace: true });
     $('#fabLocate')?.classList.add('on');
     mapCtl.resize();
   });
   bus.on('nav:end', () => {
-    const route = document.querySelector('.route-sheet');
-    if (route) route.hidden = true;
-    document.body.classList.remove('has-sheet');
-    clearJourney({ keepView: true });
+    // Ending guidance goes back to Directions — never to an empty search box.
+    // The destination, stops, alternatives and cost stay exactly as they were
+    // entered; the sheet's ✕ closes the whole result and Start ride begins
+    // guidance again. The route stays drawn so the preview is immediately
+    // recognisable.
+    const routeSheet = document.querySelector('.route-sheet');
+    // Leaving the radar for another tab hides the map, so the preview waits for
+    // the rider's return rather than floating over the Home screen.
+    if (journey.dest && currentRoute() && currentTab === 'radar') {
+      refreshJourney();
+      if (routeSheet) routeSheet.hidden = false;
+      document.body.classList.add('has-sheet');
+      $('#destInput').value = journey.dest.name;
+      const clear = $('#destClear');
+      if (clear) clear.hidden = false;
+      const coords = currentRoute().meta?.coords;
+      if (coords) mapCtl.fitRoute(coords, { paddingBottom: 270, bearing: 0, pitch: 0 });
+    } else {
+      if (routeSheet) routeSheet.hidden = true;
+      document.body.classList.remove('has-sheet');
+    }
     updateGroupUi();
   });
   bus.on('nav:arrived', () => {
-    clearJourney({ keepView: true });
-    setTimeout(() => { if (geo.pos) mapCtl.recenter(geo.pos, { zoom: 16.2 }); }, 300);
+    // nav:end has already rebuilt the Directions preview and framed the whole
+    // route. Do not pull the camera back to the arrival point on top of that —
+    // two competing camera moves in half a second look like a glitch.
+    updateGroupUi();
   });
 
   bus.on('map:ready', () => {

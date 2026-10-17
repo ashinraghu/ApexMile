@@ -1,12 +1,13 @@
 // Turn-by-turn. Owns the active route, the banner, the bottom bar and the
 // camera-follow loop. Everything is driven by the single GPS watcher in geo.js.
 import { bus } from './bus.js';
-import { geo, distanceM } from './geo.js';
+import { geo, distanceM, bearingDeg } from './geo.js';
 import * as mapCtl from './map.js';
 import {
   buildRouteMeta, nearestOnRoute, directions, formatDistance,
 } from './routing.js';
 import { toast, haptic } from './ui.js';
+import { voiceSvg } from './navicons.js';
 
 export const nav = {
   active: false,
@@ -29,6 +30,8 @@ export const nav = {
   _via: [],
   _label: '',
   _arriveAt: 0,
+  _exitHeading: null,
+  _arrowApplied: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -39,8 +42,11 @@ export function setVoice(on) {
   nav.voiceOn = Boolean(on);
   const btn = $('navVoiceBtn');
   if (btn) {
-    btn.textContent = nav.voiceOn ? '🔊' : '🔇';
+    // A drawn speaker, not an emoji: Android's emoji font coloured the old one
+    // and it did not match the rest of the navigation bar.
+    btn.innerHTML = voiceSvg(nav.voiceOn);
     btn.setAttribute('aria-label', nav.voiceOn ? 'Mute voice guidance' : 'Unmute voice guidance');
+    btn.setAttribute('aria-pressed', nav.voiceOn ? 'true' : 'false');
   }
   if (!nav.voiceOn) stopSpeaking();
   return nav.voiceOn;
@@ -81,6 +87,95 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && nav.active) acquireWakeLock();
 });
 
+/* ------------------------------------------------------------------ immersive */
+
+let immersiveRequested = false;
+
+function scheduleResize(force = false) {
+  mapCtl.resize();
+  setTimeout(() => { if (nav.active || force) mapCtl.resize(); }, 220);
+  setTimeout(() => { if (nav.active || force) mapCtl.resize(); }, 700);
+}
+
+/**
+ * Ask the browser for true fullscreen. Installed PWAs and iOS Safari may say
+ * no (iPhone has no element fullscreen at all) — that is fine, because the
+ * `.navigating` stylesheet already takes over the whole viewport.
+ */
+export function enterImmersive() {
+  scheduleResize();
+  if (document.fullscreenElement || document.webkitFullscreenElement) return;
+  const el = document.documentElement;
+  const standard = Boolean(el.requestFullscreen);
+  const request = el.requestFullscreen || el.webkitRequestFullscreen;
+  if (!request) return;
+  try {
+    // WebKit's prefixed call takes no options; passing one throws there.
+    const result = standard ? request.call(el, { navigationUI: 'hide' }) : request.call(el);
+    if (result && typeof result.then === 'function') {
+      result.then(() => { immersiveRequested = true; scheduleResize(); }).catch(() => {});
+    } else {
+      immersiveRequested = true;
+    }
+  } catch { /* not allowed — the CSS layout still fills the screen */ }
+}
+
+export function exitImmersive() {
+  if (!immersiveRequested) return;
+  immersiveRequested = false;
+  try {
+    if (document.fullscreenElement) document.exitFullscreen?.()?.catch?.(() => {});
+    else if (document.webkitFullscreenElement) document.webkitExitFullscreen?.();
+  } catch { /* noop */ }
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('resize', () => { if (nav.active) scheduleResize(); });
+  window.addEventListener('orientationchange', () => {
+    if (nav.active) setTimeout(scheduleResize, 260);
+  });
+  document.addEventListener('fullscreenchange', () => { if (nav.active) scheduleResize(); });
+  document.addEventListener('webkitfullscreenchange', () => { if (nav.active) scheduleResize(); });
+}
+
+/* ------------------------------------------------------------------ geometry */
+
+/** Point `distance` metres along the route, interpolated between vertices. */
+function coordAtDistance(meta, distance) {
+  const { coords, cum } = meta;
+  if (!coords?.length) return null;
+  if (coords.length === 1) return { lat: coords[0][1], lng: coords[0][0] };
+  const d = Math.max(0, Math.min(meta.total, distance));
+  let lo = 1;
+  let hi = coords.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (cum[mid] < d) lo = mid + 1;
+    else hi = mid;
+  }
+  const i = Math.max(1, lo);
+  const a = coords[i - 1];
+  const b = coords[i];
+  const span = cum[i] - cum[i - 1];
+  const t = span > 0 ? Math.max(0, Math.min(1, (d - cum[i - 1]) / span)) : 0;
+  return { lat: a[1] + (b[1] - a[1]) * t, lng: a[0] + (b[0] - a[0]) * t };
+}
+
+/** Compass heading of the road itself, not of the phone. */
+function routeHeadingAt(meta, along) {
+  if (!meta) return null;
+  const a = coordAtDistance(meta, along);
+  const b = coordAtDistance(meta, along + 30);
+  if (!a || !b) return null;
+  if (Math.abs(a.lat - b.lat) < 1e-9 && Math.abs(a.lng - b.lng) < 1e-9) return null;
+  return bearingDeg(a, b);
+}
+
+/** Shortest signed difference between two compass bearings, in degrees. */
+function headingDelta(target, current) {
+  return ((target - current + 540) % 360) - 180;
+}
+
 /* ------------------------------------------------------------------ start / stop */
 
 export function startNavigation(route, { to, via = [], label = '' } = {}) {
@@ -102,11 +197,15 @@ export function startNavigation(route, { to, via = [], label = '' } = {}) {
   nav._via = via;
   nav._label = label;
   nav._arriveAt = 0;
+  nav._exitHeading = null;
+  nav._arrowApplied = null;
   nav._lastUi = 0;
   nav._lastSpeakAt = 0;
 
   document.body.classList.add('navigating');
   document.body.classList.remove('has-sheet');
+  document.documentElement.classList.add('navigating');
+  enterImmersive();
   $('navBanner').hidden = false;
   $('navBottom').hidden = false;
   $('routeSheet').hidden = true;
@@ -120,8 +219,19 @@ export function startNavigation(route, { to, via = [], label = '' } = {}) {
     mode: nav.mode,
   });
 
-  if (geo.pos) update(geo.pos);
-  else toast('Waiting for a GPS fix…', { type: 'warn' });
+  if (geo.pos) {
+    // Point the map down the road immediately, even while standing still.
+    const heading = routeHeadingAt(nav.meta, 0) ?? geo.pos.heading;
+    mapCtl.cameraFollow(geo.pos, {
+      heading,
+      speed: (geo.pos.speed || 0) * 3.6,
+      mode: nav.mode,
+      forceBearing: true,
+    });
+    update(geo.pos);
+  } else {
+    toast('Waiting for a GPS fix…', { type: 'warn' });
+  }
 
   acquireWakeLock();
   setVoice(nav.voiceOn);
@@ -138,6 +248,11 @@ export function stopNavigation({ silent = false, reason = '' } = {}) {
 
   nav.active = false;
   document.body.classList.remove('navigating');
+  document.documentElement.classList.remove('navigating');
+  exitImmersive();
+  // The layout changes back to the tabbed shell, and leaving fullscreen changes
+  // the viewport again a moment later: resize both now and after the dust.
+  scheduleResize(true);
   $('navBanner').hidden = true;
   $('navBottom').hidden = true;
   mapCtl.setNavigating(false);
@@ -158,6 +273,10 @@ export function stopNavigation({ silent = false, reason = '' } = {}) {
     }
   }
 
+  nav._exitHeading = null;
+  nav._arrowApplied = null;
+  const icon = $('navIcon');
+  if (icon) icon.style.transform = 'rotate(0deg)';
   nav.meta = null;
   nav.route = null;
   bus.emit('nav:end', { km, seconds: elapsed });
@@ -168,6 +287,10 @@ export function stopNavigation({ silent = false, reason = '' } = {}) {
 bus.on('geo:fix', (pos) => {
   if (!nav.active || !nav.meta) return;
   update(pos);
+});
+
+bus.on('map:rotate', () => {
+  if (nav.active) applyArrow();
 });
 
 function update(pos) {
@@ -200,11 +323,25 @@ function update(pos) {
   if (checkArrival(remaining, pos)) return;
   checkOffRoute(near, pos);
 
+  const roadHeading = routeHeadingAt(meta, near.along);
+  const facing = roadHeading ?? pos.heading;
   if (mapCtl.isFollowing()) {
-    mapCtl.cameraFollow(pos, { heading: pos.heading, speed: speed * 3.6, mode: nav.mode });
+    mapCtl.cameraFollow(pos, {
+      heading: facing,
+      speed: speed * 3.6,
+      mode: nav.mode,
+      forceBearing: true,
+    });
   }
   mapCtl.setRouteProgress(near.progress);
-  mapCtl.setMe(pos);
+  mapCtl.setMe({ ...pos, heading: facing });
+}
+
+function upcomingStep(near) {
+  const steps = nav.meta.steps;
+  let idx = steps.findIndex((s) => s.beginDist > near.along + 4);
+  if (idx < 0) idx = steps.length - 1;
+  return { step: steps[idx], idx, next: steps[idx + 1] || null };
 }
 
 function updateUi(near, etaSec, pos) {
@@ -213,21 +350,38 @@ function updateUi(near, etaSec, pos) {
   nav._lastUi = now;
 
   const steps = nav.meta.steps;
-  let idx = steps.findIndex((s) => s.beginDist > near.along + 4);
-  if (idx < 0) idx = steps.length - 1;
-  const step = steps[idx];
-  const next = steps[idx + 1];
+  const { step, idx, next } = upcomingStep(near);
   if (!step) return;
 
-  const distToTurn = Math.max(0, step.beginDist - near.along);
-  const isFinal = step.maneuver?.type === 'arrive' || idx === steps.length - 1;
+  const lastStep = idx >= steps.length - 1 || step.maneuver?.type === 'arrive';
+  const arrived = lastStep && near.remaining < 35;
+  const distToTurn = lastStep ? near.remaining : Math.max(0, step.beginDist - near.along);
+  const label = nav._label || 'destination';
 
-  $('navIcon').textContent = isFinal ? '🏁' : step.icon;
-  $('navPrimary').textContent = step.instruction;
-  $('navSub').textContent = isFinal
-    ? 'You have arrived'
-    : next ? `Then ${next.instruction.toLowerCase()}` : (step.name || '');
-  $('navDist').textContent = isFinal ? '' : formatDistance(distToTurn);
+  updateNavArrow(step, lastStep, arrived, near);
+
+  if (arrived) {
+    $('navPrimary').textContent = 'You have arrived';
+    $('navSub').textContent = label;
+    $('navDist').textContent = '';
+  } else if (lastStep) {
+    // Route engines label the final leg "You have arrived" from the moment it
+    // begins. Saying that three kilometres early is exactly the kind of
+    // contradiction that makes guidance feel wrong, so reword it.
+    $('navPrimary').textContent = `Continue to ${label}`;
+    $('navSub').textContent = step.name ? `via ${step.name}` : 'Follow the road ahead';
+    $('navDist').textContent = formatDistance(near.remaining);
+  } else {
+    $('navPrimary').textContent = step.instruction;
+    const nextIsFinal = !next || next.maneuver?.type === 'arrive';
+    // Lower-case only the leading verb so street names keep their capitals
+    // ("Then turn right onto East Road", not "…east road").
+    const thenText = next ? next.instruction.replace(/^(\w)/, (c) => c.toLowerCase()) : '';
+    $('navSub').textContent = next
+      ? (nextIsFinal ? `Then arrive at ${label}` : `Then ${thenText}`)
+      : (step.name || '');
+    $('navDist').textContent = formatDistance(distToTurn);
+  }
 
   const mins = Math.max(0, Math.round(etaSec / 60));
   $('navEta').textContent = mins < 60
@@ -241,12 +395,76 @@ function updateUi(near, etaSec, pos) {
   void pos;
 }
 
+/**
+ * The manoeuvre arrow points at the direction the rider must take.
+ *
+ * The map rotates so the rider's direction is always up the screen, which is
+ * exactly why a fixed "left turn" glyph creates confusion: on a road that is
+ * itself turning, the glyph and the road disagree. One arrow is drawn, and it
+ * is rotated by (exit road heading − current map bearing). Up the screen reads
+ * 0°, a left turn sits near −90°, and the number only changes when the route
+ * or the camera does.
+ *
+ * On the last leg there is no turn left to take, so the arrow follows the road
+ * itself: it keeps pointing at the destination rather than freezing on a
+ * manoeuvre that no longer exists.
+ */
+function updateNavArrow(step, lastStep, arrived, near) {
+  const icon = $('navIcon');
+  if (!icon) return;
+
+  if (arrived) {
+    nav._exitHeading = null;
+    icon.classList.add('arriving');
+    applyArrow();
+    return;
+  }
+  icon.classList.remove('arriving');
+
+  if (lastStep) {
+    const heading = routeHeadingAt(nav.meta, near.along + 15);
+    if (heading != null) nav._exitHeading = heading;
+    applyArrow();
+    return;
+  }
+
+  const length = Math.max(1, step.endDist - step.beginDist);
+  const look = Math.min(length, Math.max(14, length * 0.55), 80);
+  const exitHeading = routeHeadingAt(nav.meta, step.beginDist + look);
+  if (exitHeading != null) nav._exitHeading = exitHeading;
+  applyArrow();
+}
+
+function applyArrow() {
+  const icon = $('navIcon');
+  if (!icon) return;
+  if (nav._exitHeading == null) {
+    nav._arrowApplied = null;
+    icon.style.transform = 'rotate(0deg)';
+    icon.classList.remove('straight');
+    return;
+  }
+  // Canonicalise to [-180, 180) before comparing with the previous angle, so a
+  // hair of floating-point noise at ±180 cannot flip the arrow by a full turn.
+  let deg = ((headingDelta(nav._exitHeading, mapCtl.currentBearing()) + 540) % 360) - 180;
+  if (nav._arrowApplied != null) {
+    const diff = deg - nav._arrowApplied;
+    // Half a degree of slack: a floating-point ±180 is not a real reversal.
+    if (diff > 180.5) deg -= 360;
+    else if (diff < -180.5) deg += 360;
+  }
+  nav._arrowApplied = deg;
+  icon.style.transform = `rotate(${deg.toFixed(1)}deg)`;
+  icon.classList.toggle('straight', Math.abs(deg) < 12);
+}
+
 function announce(near) {
   const steps = nav.meta.steps;
-  let idx = steps.findIndex((s) => s.beginDist > near.along + 4);
-  if (idx < 0) idx = steps.length - 1;
-  const step = steps[idx];
+  const { step, idx } = upcomingStep(near);
   if (!step) return;
+  // Arrival has its own prompt in checkArrival; speaking it when the last leg
+  // merely begins would tell the rider they have arrived kilometres early.
+  if (idx >= steps.length - 1 || step.maneuver?.type === 'arrive') return;
   const dist = step.beginDist - near.along;
 
   // One prompt per distance band, never repeated for the same manoeuvre.

@@ -101,3 +101,121 @@ Or Cloudflare dashboard → Pages → connect the repo → **output directory `a
 Then: open the HTTPS URL → install/add to Home Screen → allow location → log a full tank → open **Ride radar** → tap the 👥 button → *Start a group ride* → share the QR/link/code. A second phone opens the invite link, enters a name, and appears on the map.
 
 For a solo demo of the pack UI, open `…/?demo=1`, start a ride, then tap *Add a demo rider* in the invite sheet.
+
+---
+
+## Part 4 — v11: the follow-up round
+
+Every item below came from using v10 on a phone.
+
+### 1. Garage
+
+- Vehicle photos are rendered as 44 px rounded thumbnails (they were full-width). `views.js` builds an `<img class="veh-thumb">` with `loading="lazy"`, `decoding="async"`, and the row uses a fixed grid so a photo can never change the row height.
+- The form grid was re-aligned: every field is a full-width label/input pair, the two-column rows only exist where the labels are the same height, and the type switcher no longer pushes the name field out of line.
+
+### 2. Radar route panel
+
+- The **+ Stop** control and the **Route** row are gone. `index.html` no longer contains the stop search input; `main.js` no longer binds a stop button. Multi-stop state remains in `journey.js` for existing saves, but nothing in the UI can add one.
+
+### 3. Directions → Start
+
+- The primary action now mirrors Google Maps. With a destination picked it reads **Start ride**; while the input holds text that has not been geocoded it still reads **Directions**, and pressing it resolves the text into the named place first.
+- The first press opens the A→B preview sheet (distance, per-mode ETA, cost, tolls, steps). The second press starts navigation and hides the preview's own start button.
+
+### 4. Car / Bike / Walk
+
+- Three explicit modes with their own speed models and ETA chips: 13 min bike / 9 min car / 68 min walk on the smoke route. Walking disables fuel and toll lines ("No fuel or tolls").
+- The chosen mode is persisted (`tripMode`, `tripModeSet`) and published to the ride room, so a joining rider inherits the captain's mode.
+
+### 5. Trip cost and tolls
+
+- **Bike/Car** route sheets show the measured-or-estimated km/L of the **active garage vehicle**, litres needed, the current ₹/L rate, and the resulting fuel cost.
+- **Car** additionally shows toll plazas found along the corridor (`tolls.js`, Overpass `barrier=toll_booth` and `highway=toll_gantry`, 200 m corridor) at ₹95 per plaza, with the toll's share of the ETA. This is labelled an estimate, not an NHAI quote.
+
+### 6. Voice mute that stays muted
+
+- `state.navVoice` is written on every toggle and the boot sequence calls `setVoice(state.navVoice !== false)` before the first render, so the nav bar, the settings switch and the speech engine agree after reload, after re-login and after a ride ends.
+- The root cause of the "mute does not stick" report was a double boot: two `DOMContentLoaded` sources ran `boot()` twice and bound the settings switch twice, so one tap toggled twice. `boot()` is now idempotent.
+
+### 7. Fuel prices
+
+- `prices.js` fetches today's district rate (The Core's India Fuel Watch JSON, sourced from Goodreturns) through a same-origin `/api/fuel-prices` route implemented in `worker.js` (30-minute edge cache), with a direct fallback when the route is absent. City aliases (Bengaluru/Bangalore, Mysuru/Mysore, …) make the match on the rider's district.
+- The UI says **Today · <time>** only when today's data actually arrived, otherwise **Verified baseline · <date>**. Manual corrections win and are never overwritten; the fuel sheet can restore the live rate.
+- There is no keyless pump-level API in India. Pump prices are set per outlet and are not published as open data; the daily district rate is the most precise public figure, and the app says so instead of implying otherwise.
+
+### 8. Group ride
+
+- Status now reads **Live** from the moment the room code is issued (it used to fall back to "Offline" until the first publish round-trip).
+- The captain publishes destination and mode on the retained `state` topic; late joiners replay it, so the captain's choice appears on every screen.
+- Quick messages are a one-tap row in the pack sheet and are appended to the shared log on every device. Messages are live-only by design — they are not retained on the public broker.
+- Peers publish position/heading/speed every 3 s when they move more than 6 m, with a 12 s heartbeat, and are redrawn on every event, so movement is simultaneous rather than only on join.
+
+### Verification
+
+- ESLint: 0 errors, 0 warnings over `app/js`.
+- esbuild bundle resolves all imports (238 KB).
+- jsdom suite A (boot, auth, garage, refuel, route, modes, tolls, voice, nav start/stop): 27/27.
+- jsdom suite B (two independent app instances on an in-memory broker: create, join, riders, markers, live movement, quick message, captain destination → follower route): 14/14.
+- `worker.js` unit cases: 200 + edge cache headers, 405 on POST, asset passthrough, 502 on upstream failure.
+
+Still not verified here: a physical iPhone/Android, real GPS, real broker reachability on a mobile network, and the live feed from inside India. Those remain the acceptance test.
+
+---
+
+## Part 5 — v11.1: full-screen guidance and an honest arrow
+
+### Full screen, both orientations
+
+- Starting navigation adds `.navigating` to `<body>` and asks for the real Fullscreen API while the tap is still a gesture. If the browser refuses (iOS Safari has no element fullscreen; some embedded webviews refuse), the stylesheet still takes the whole viewport, so nothing changes visually except the system status bar.
+- `body.navigating .tab-map` is `position:fixed` on all four edges at `100vw × 100dvh`; the topbar, tabbar and install hint are hidden, the stage padding is removed and page scrolling is locked.
+- Safe areas are applied to the controls, never to the map: the banner gets `safe-t`, the ETA card `safe-b`, and the landscape card/fabs/attribution get `safe-l`/`safe-r`.
+- Landscape: the ETA card docks bottom-right at `min(380px, 44vw)`, the banner is capped to the free width, the floating controls move to the left, and attribution moves bottom-left (still visible, as the licences require) instead of being hidden.
+- Short landscape phones (`max-height:430px`) drop the secondary line and tighten the card.
+- `resize`, `orientationchange` and `fullscreenchange` all re-run `map.resize()` (immediately and again after the transition), so the canvas is never left at the old aspect ratio.
+- Ending guidance removes the classes, releases fullscreen and resizes the map back into the tab layout.
+
+### The arrow
+
+- The emoji manoeuvre glyph is gone. The banner icon is one SVG arrow that is rotated by `exit road heading − current map bearing`, measured just *after* the upcoming manoeuvre. Ahead is 0°, a right turn is +90°, a left turn is −90°, and the value updates while the camera eases.
+- The camera now follows the **road** heading (from the route geometry) rather than the raw GPS bearing, so the map is aligned to the road from the first frame even when standing still, and no longer twitches at walking pace.
+- Rotation is normalised to the short arc with a half-degree tolerance, so ±180° floating-point noise cannot spin the arrow a full turn.
+- On the last leg the router's "You have arrived" instruction is replaced with "Continue to <destination>", the distance shown is the distance remaining rather than the distance to a turn that does not exist, voice guidance for that leg is suppressed, and the arrow follows the road to the destination. Arrival wording appears only within 35 m.
+- The location puck becomes a heading arrow during guidance (dot + cone outside guidance) and points along the road.
+
+### Verification
+
+- jsdom suite: navigating state, html flag, banner vector arrow, fixed/full-viewport map tab, hidden chrome, scroll lock, puck arrow visible and dot hidden, right-turn arrow at +90°, camera road-aligned at start, camera facing east after the corner with the arrow still +90° on screen, last-leg guidance wording and arrow, orientation change keeping guidance and resizing the map, clean exit — **all pass**.
+- Static CSS audit (css-tree): fixed/full-viewport nav surface, `100dvh`, safe-area insets on banner/card, landscape card/controls/attribution placement, arrow transform origin and transition, puck pivot origin, vector icon in markup, SW cache bumped to `apexmile-v11.1.0` — **all pass**.
+- ESLint 0 errors / 0 warnings; esbuild resolves all imports.
+
+---
+
+## Part 6 — v11.2: two map layers, drawn symbols, and a way back to Directions
+
+### The layer strip is two choices, not seven
+
+- The map now offers **Live Traffic** and **Satellite** only. Streets, Night and Terrain were basemaps the app already chose by theme; the three POI shortcuts (⛽ Fuel, 🍽 Food, 🔧 Repair) and the Overpass pin path behind them are gone, so nothing competes with the route line.
+- Satellite is a plain toggle: on it switches to Esri World Imagery, off it returns to the theme's basemap. A theme change no longer yanks the rider out of satellite.
+- **Live traffic** is TomTom's raster flow layer (`relative0`, 256 px tiles). TomTom is the one provider with a free tile tier (50,000 tiles/day, no card), but it needs a key, so the layer is opt-in: tapping the pill with no key opens a setup sheet, and the key is stored in this browser only — never in the bundle or the repository. The key can also be set from Garage → Ride settings.
+- The overlay re-adds itself after a style swap, sits underneath the accuracy and route layers, carries `Traffic © TomTom` attribution, and is deliberately excluded from the service-worker tile cache so flow colours stay current. `api.tomtom.com` is allowed in the CSP's `connect-src` and `img-src`. A 401/403 on the tiles (invalid, expired or wrongly restricted key) turns the overlay off once, says so, and keeps the key in settings.
+
+### Every navigation glyph is drawn
+
+- The turn list no longer uses emoji. One 24×24 grid and one 2 px stroke cover straight, slight/sharp/90° turns, U-turn, roundabout, merge, fork, ferry and arrival, rendered from `js/navicons.js` in the green banner's turn sheet.
+- The group and voice buttons in the navigation bar are drawn too, along with the radar's group FAB and the pack-gap warning; `setVoice` swaps the speaker-with-waves for a slashed speaker instead of writing 🔊/🔇, and keeps `aria-pressed` honest.
+- The banner arrow itself is a navigation-chevron silhouette (concave base, rounded shoulders) rather than a blocky arrow, still rotated by `exit road heading − map bearing`.
+
+### Ending guidance goes back to Directions
+
+- `stopNavigation` no longer clears the journey. `nav:end` re-renders the route preview: the Directions sheet reappears with the destination text, ETA, distance, alternatives, mode cards and cost still populated, the route is re-drawn with its alternatives, and the camera fits the whole route — north-up and flat again, because a plan should not read like a moving camera.
+- From that preview the rider can press **Start ride** again (a fresh plan is fetched if they have moved more than ~220 m) or tap ✕ to close the whole search result. Arrival takes the same path: the preview returns, then the camera settles on the arrival point.
+- Leaving the radar tab mid-guidance still ends guidance and keeps the plan, but the preview stays out of the way on the other tab; returning to the radar brings it back with the destination and `Start ride` intact.
+
+### Verification
+
+- jsdom suite v11.2 (new, 60 checks): two-pill strip with the right labels and vectors, POI IDs gone, traffic setup sheet, `apex-traffic` added with the TomTom flow URL, local persistence of the key and toggle, overlay surviving a satellite style swap and returning to streets, four turn-list steps all with SVG glyphs and no emoji, drawn voice/group buttons, speaker swap and `aria-pressed`, end-navigation returning to Directions with destination/ETA/distance/`Start ride` preserved, restart from the preview, ✕ clearing the result, the preview's north-up/flat reset, a tab-change exit that keeps the plan off-screen and restores it on return, and a simulated 403 turning the overlay off while keeping the key for editing — **all pass**.
+- v11.1 navigation suite still passes end to end (arrow at +90° before and after the corner, immersive layout, orientation change, tab-change exit, voice persistence, group ride).
+- Static CSS audit extended with the two-pill markup, the drawn FAB and gap icons, 14 px pill icons, 19 px step/nav-bar glyphs, TomTom CSP entries and SW `apexmile-v11.2.0` + `navicons.js` precache — **all pass**.
+- ESLint 0 errors / 0 warnings; esbuild resolves all imports; `node --check` on every touched module.
+
+Still not verified here: a physical iPhone/Android, real GPS, a real TomTom key, and mobile-network broker reachability.

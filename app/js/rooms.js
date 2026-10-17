@@ -10,7 +10,16 @@ import { state } from './store.js';
 import { geo, distanceM } from './geo.js';
 import { toast, haptic } from './ui.js';
 
-const BROKER = 'wss://broker.emqx.io:8084/mqtt';
+// Public MQTT-over-WebSocket brokers, tried in order. The previous build used
+// a single broker: when that one endpoint was blocked (common on some Indian
+// mobile networks) the badge flipped straight to Offline and riders never saw
+// each other. One reachable broker is enough for a room to work.
+const BROKERS = [
+  { url: 'wss://broker.emqx.io:8084/mqtt', label: 'EMQX' },
+  { url: 'wss://broker.hivemq.com:8884/mqtt', label: 'HiveMQ' },
+  { url: 'wss://mqtt.eclipseprojects.io:443/mqtt', label: 'Eclipse' },
+  { url: 'wss://test.mosquitto.org:8081/mqtt', label: 'Mosquitto' },
+];
 const PREFIX = 'apexmile/v10/ride/';
 const ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
 const HEARTBEAT_MS = 12000;
@@ -50,6 +59,14 @@ export const ride = {
   _myStatus: 'Riding normal',
   _mySos: false,
   _demoTimer: null,
+  _attempt: 0,
+  _retry: null,
+  broker: '',
+  brokerLabel: '',
+  lastError: '',
+  mode: 'bike',
+  messages: [],
+  _unread: 0,
 };
 
 /* ------------------------------------------------------------------ helpers */
@@ -102,47 +119,124 @@ function setStatus(status) {
 function connect(code) {
   if (!window.mqtt) {
     setStatus('offline');
+    ride.lastError = 'sync library missing';
     toast('Group sync library did not load — riders on this device only', { type: 'warn' });
     return;
   }
+  stopClient();
+  ride._code = code;
+  ride._attempt = 0;
+  setStatus('connecting');
+  tryNextBroker(code);
+}
 
-  const url = BROKER;
-  const client = window.mqtt.connect(url, {
-    clientId: `apex_${SELF_ID}`,
-    clean: true,
-    keepalive: 30,
-    reconnectPeriod: 5000,
-    connectTimeout: 10000,
-    will: {
-      topic: `${PREFIX}${code}/ev`,
-      payload: JSON.stringify({ t: 'bye', id: SELF_ID }),
-      qos: 0,
-      retain: false,
-    },
-  });
+function brokerCandidates() {
+  const custom = String(state.broker || '').trim();
+  const list = custom
+    ? [{ url: custom, label: 'Custom' }]
+    : BROKERS.map((b) => ({ ...b }));
+  try {
+    const saved = localStorage.getItem('apexmile.broker.url');
+    const idx = list.findIndex((b) => b.url === saved);
+    if (idx > 0) list.unshift(list.splice(idx, 1)[0]);
+  } catch { /* private mode */ }
+  return list;
+}
+
+function tryNextBroker(code) {
+  if (!ride.active || ride.code !== code) return;
+  const list = brokerCandidates();
+
+  if (ride._attempt >= list.length) {
+    ride.connected = false;
+    setStatus('offline');
+    scheduleBrokerRetry(code);
+    return;
+  }
+
+  const broker = list[ride._attempt];
+  ride._attempt += 1;
+  ride.broker = broker.url;
+  ride.brokerLabel = broker.label;
+  setStatus('connecting');
+
+  let client = null;
+  let settled = false;
+  let timer = null;
+
+  const teardown = () => {
+    clearTimeout(timer);
+    try { client?.removeAllListeners?.(); } catch { /* noop */ }
+    try { client?.end(true); } catch { /* noop */ }
+    if (ride._client === client) ride._client = null;
+  };
+
+  const failed = (reason) => {
+    if (settled) return;
+    settled = true;
+    ride.lastError = reason || 'no connection';
+    teardown();
+    if (ride.active && ride.code === code) tryNextBroker(code);
+  };
+
+  try {
+    client = window.mqtt.connect(broker.url, {
+      clientId: `apex_${SELF_ID}`,
+      clean: true,
+      keepalive: 30,
+      reconnectPeriod: 0, // failover is ours, not mqtt.js's
+      connectTimeout: 7000,
+      will: {
+        topic: `${PREFIX}${code}/ev`,
+        payload: JSON.stringify({ t: 'bye', id: SELF_ID }),
+        qos: 0,
+        retain: false,
+      },
+    });
+  } catch (err) {
+    ride.lastError = err?.message || 'connect failed';
+    tryNextBroker(code);
+    return;
+  }
 
   ride._client = client;
-  setStatus('connecting');
+  timer = setTimeout(() => failed('timed out'), 9000);
 
   const evTopic = `${PREFIX}${code}/ev`;
   const stateTopic = `${PREFIX}${code}/state`;
 
   client.on('connect', () => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
     ride.connected = true;
+    ride._attempt = 0;
+    try { localStorage.setItem('apexmile.broker.url', broker.url); } catch { /* private */ }
     setStatus('live');
     client.subscribe([evTopic, stateTopic], { qos: 0 }, (err) => {
       if (err) console.warn('[ride] subscribe', err);
     });
-    publish({ t: 'hello' });
+    publish({ t: 'hello', lat: geo.pos?.lat, lng: geo.pos?.lng });
     publishPosition(geo.pos, true);
     if (ride.isCaptain) publishCaptainState();
+    bus.emit('ride:transport', connectionInfo());
   });
 
   client.on('reconnect', () => setStatus('connecting'));
-  client.on('close', () => { ride.connected = false; setStatus('offline'); });
-  client.on('error', (err) => {
-    console.warn('[ride] mqtt', err?.message);
+
+  client.on('close', () => {
+    if (!settled) { failed('closed before connect'); return; }
+    if (!ride.active || ride.code !== code) return;
+    if (!ride.connected) return;
+    ride.connected = false;
     setStatus('offline');
+    scheduleBrokerRetry(code);
+    bus.emit('ride:transport', connectionInfo());
+  });
+
+  client.on('error', (err) => {
+    ride.lastError = err?.message || 'socket error';
+    if (!settled) failed(ride.lastError);
   });
 
   client.on('message', (topic, payload) => {
@@ -151,6 +245,49 @@ function connect(code) {
     if (topic.endsWith('/state')) handleCaptainState(pkt);
     else handlePacket(pkt);
   });
+}
+
+function scheduleBrokerRetry(code) {
+  clearTimeout(ride._retry);
+  ride._retry = setTimeout(() => {
+    if (!ride.active || ride.code !== code) return;
+    ride._attempt = 0;
+    setStatus('connecting');
+    tryNextBroker(code);
+  }, 15000);
+}
+
+function stopClient() {
+  clearTimeout(ride._retry);
+  ride._retry = null;
+  const client = ride._client;
+  ride._client = null;
+  ride.connected = false;
+  try { client?.removeAllListeners?.(); } catch { /* noop */ }
+  try { client?.end(true); } catch { /* noop */ }
+}
+
+export function reconnectRide() {
+  if (!ride.active) return false;
+  clearTimeout(ride._retry);
+  ride._retry = null;
+  ride._attempt = 0;
+  stopClient();
+  setStatus('connecting');
+  tryNextBroker(ride.code);
+  bus.emit('ride:transport', connectionInfo());
+  return true;
+}
+
+export function connectionInfo() {
+  return {
+    status: ride.status,
+    broker: ride.broker,
+    brokerLabel: ride.brokerLabel,
+    connected: ride.connected,
+    lastError: ride.lastError,
+    peers: ride.peers.size,
+  };
 }
 
 function publish(packet) {
@@ -205,6 +342,21 @@ function handlePacket(pkt) {
     haptic([40, 70, 40]);
     bus.emit('ride:ping', { fromName: pkt.name || 'A rider', fromId: pkt.id });
     notify(`${pkt.name || 'A rider'} asks: where are you?`, 'Open ApexMile to reply with your live location.');
+    return;
+  }
+
+  if (pkt.t === 'msg') {
+    appendMessage({
+      id: pkt.id,
+      name: pkt.name || 'Rider',
+      text: String(pkt.text || '').slice(0, 160),
+      kind: pkt.kind || 'chat',
+      at: pkt.ts || Date.now(),
+      mine: false,
+    });
+    haptic([14, 26, 14]);
+    toast(`${pkt.name || 'Rider'}: ${pkt.text}`, { icon: '💬', ms: 4200 });
+    notify(`${pkt.name || 'Rider'}`, pkt.text || 'New pack message');
     return;
   }
 
@@ -288,6 +440,7 @@ function publishCaptainState() {
     trip: ride.trip,
     dest: ride.dest,
     navStarted: ride.navStarted,
+    mode: ride.mode,
     updatedAt: Date.now(),
   };
   try {
@@ -308,7 +461,14 @@ function handleCaptainState(pkt) {
   ride.trip = pkt.trip || ride.trip;
   ride.dest = pkt.dest || null;
   ride.navStarted = Boolean(pkt.navStarted);
+  if (pkt.mode) ride.mode = pkt.mode;
   bus.emit('ride:captain-state', pkt);
+}
+
+export function setMode(mode) {
+  if (!['bike', 'car', 'walk'].includes(mode)) return;
+  ride.mode = mode;
+  publishCaptainState();
 }
 
 export function setDestination(dest, navStarted = false) {
@@ -331,6 +491,9 @@ export function createRide({ trip = 'Group ride', dest = null, code } = {}) {
   ride.peers.clear();
   ride._myStatus = 'Riding normal';
   ride._mySos = false;
+  ride.messages = [];
+  ride._unread = 0;
+  ride.mode = state.tripMode || 'bike';
 
   openChannel(ride.code);
   connect(ride.code);
@@ -352,6 +515,8 @@ export function joinRide(code, { asCaptain = false } = {}) {
   ride.trip = 'Group ride';
   ride.startedAt = Date.now();
   ride.peers.clear();
+  ride.messages = [];
+  ride._unread = 0;
 
   openChannel(clean);
   connect(clean);
@@ -409,8 +574,7 @@ export function leaveRide({ broadcast = true, silent = false } = {}) {
   ride._sweep = null;
   ride._demoTimer = null;
 
-  try { ride._client?.end(true); } catch { /* noop */ }
-  ride._client = null;
+  stopClient();
   try { ride._channel?.close(); } catch { /* noop */ }
   ride._channel = null;
 
@@ -421,6 +585,11 @@ export function leaveRide({ broadcast = true, silent = false } = {}) {
   ride.dest = null;
   ride.navStarted = false;
   ride.isCaptain = false;
+  ride.messages = [];
+  ride._unread = 0;
+  ride.broker = '';
+  ride.brokerLabel = '';
+  ride.lastError = '';
   setStatus('idle');
 
   bus.emit('ride:peers', { peers: [] });
@@ -449,6 +618,45 @@ export function endRideForAll() {
 }
 
 /* ------------------------------------------------------------------ api */
+
+export const QUICK_MESSAGES = [
+  'Stopping for fuel',
+  'Water break',
+  'Wait for me',
+  'All good',
+  'Photo stop',
+  'Catch up when you can',
+];
+
+function appendMessage(msg) {
+  const clean = {
+    ...msg,
+    text: String(msg.text || '').slice(0, 160),
+    at: Number(msg.at) || Date.now(),
+  };
+  ride.messages.push(clean);
+  if (ride.messages.length > 80) ride.messages.shift();
+  if (!clean.mine) ride._unread = Math.min(99, (ride._unread || 0) + 1);
+  bus.emit('ride:message', { message: clean, unread: ride._unread });
+}
+
+export function sendMessage(text, { kind = 'chat' } = {}) {
+  const body = String(text || '').trim().slice(0, 160);
+  if (!body) return false;
+  if (!ride.active) {
+    toast('Start a group ride first', { type: 'warn' });
+    return false;
+  }
+  const full = publish({ t: 'msg', text: body, kind });
+  appendMessage({ ...full, text: body, kind, at: full.ts, mine: true });
+  return true;
+}
+
+export function markMessagesRead() {
+  if (!ride._unread) return;
+  ride._unread = 0;
+  bus.emit('ride:message', { message: null, unread: 0 });
+}
 
 export function publishNow() {
   publishPosition(geo.pos, true);
