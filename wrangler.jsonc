@@ -1,7 +1,5 @@
 {
-  // Static app in app/ plus Worker routes for place search and daily fuel prices.
-  // /api/* runs worker.js; every other request is served straight from
-  // the assets directory (including _headers and sw.js).
+  "$schema": "node_modules/wrangler/config-schema.json",
   "name": "apexmile",
   "main": "./worker.js",
   "compatibility_date": "2026-10-17",
